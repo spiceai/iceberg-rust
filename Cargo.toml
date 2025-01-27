@@ -57,6 +57,9 @@ aws-sdk-glue = "1.39"
 aws-sdk-s3tables = "1.28.0"
 backon = "1.5.1"
 base64 = "0.22.1"
+aws-sdk-sts = "1.63"
+aws-sigv4 = { version = "1.2", features = ["sign-http"] }
+aws-credential-types = "1.2"
 bimap = "0.6"
 bytes = "1.10"
 chrono = "0.4.41"
@@ -101,6 +104,7 @@ pretty_assertions = "1.4"
 rand = "0.8.5"
 regex = "1.10.5"
 reqwest = { version = "0.12.12", default-features = false, features = ["json"] }
+reqwest-middleware = { version = "0.4.0", features = ["json"] }
 roaring = { version = "0.11" }
 rust_decimal = "1.37.1"
 serde = { version = "1.0.219", features = ["rc"] }
