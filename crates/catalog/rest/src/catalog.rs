@@ -153,6 +153,10 @@ impl RestCatalogConfig {
             .join("/")
     }
 
+    pub(crate) fn base_url(&self) -> String {
+        [&self.uri, PATH_V1].join("/")
+    }
+
     fn config_endpoint(&self) -> String {
         [&self.uri, PATH_V1, "config"].join("/")
     }
@@ -305,6 +309,45 @@ impl RestCatalogConfig {
 
         self.props = props;
         self
+    }
+}
+
+#[cfg(feature = "sigv4")]
+impl RestCatalogConfig {
+    pub(crate) fn sigv4_enabled(&self) -> bool {
+        self.props
+            .get("rest.sigv4-enabled")
+            .is_some_and(|v| v == "true")
+    }
+
+    pub(crate) fn signing_region(&self) -> Option<String> {
+        self.props.get("rest.signing-region").cloned()
+    }
+
+    pub(crate) fn signing_name(&self) -> Option<String> {
+        self.props.get("rest.signing-name").cloned()
+    }
+
+    pub(crate) fn access_key_id(&self) -> Option<String> {
+        self.props.get("rest.access-key-id").cloned()
+    }
+
+    pub(crate) fn secret_access_key(&self) -> Option<String> {
+        self.props.get("rest.secret-access-key").cloned()
+    }
+
+    pub(crate) fn session_token(&self) -> Option<String> {
+        self.props.get("rest.session-token").cloned()
+    }
+
+    pub(crate) fn role_arn(&self) -> Option<String> {
+        self.props.get("rest.client.assume-role.arn").cloned()
+    }
+
+    pub(crate) fn role_session_name(&self) -> Option<String> {
+        self.props
+            .get("rest.client.assume-role.session-name")
+            .cloned()
     }
 }
 

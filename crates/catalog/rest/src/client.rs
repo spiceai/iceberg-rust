@@ -21,7 +21,8 @@ use std::fmt::{Debug, Formatter};
 use http::StatusCode;
 use iceberg::{Error, ErrorKind, Result};
 use reqwest::header::HeaderMap;
-use reqwest::{Client, IntoUrl, Method, Request, RequestBuilder, Response};
+use reqwest::{IntoUrl, Method, Request, Response};
+use reqwest_middleware::{ClientBuilder, ClientWithMiddleware, RequestBuilder};
 use serde::de::DeserializeOwned;
 use tokio::sync::Mutex;
 
@@ -29,7 +30,7 @@ use crate::RestCatalogConfig;
 use crate::types::{ErrorResponse, TokenResponse};
 
 pub(crate) struct HttpClient {
-    client: Client,
+    client: ClientWithMiddleware,
 
     /// The token to be used for authentication.
     ///
@@ -56,10 +57,39 @@ impl Debug for HttpClient {
 
 impl HttpClient {
     /// Create a new http client.
+    #[allow(unused_mut)]
     pub fn new(cfg: &RestCatalogConfig) -> Result<Self> {
         let extra_headers = cfg.extra_headers()?;
+        let mut client_builder = ClientBuilder::new(cfg.client().unwrap_or_default());
+
+        #[cfg(feature = "sigv4")]
+        if cfg.sigv4_enabled() {
+            let mut sigv4_middleware = crate::middleware::sigv4::SigV4Middleware::new(
+                &cfg.base_url(),
+                cfg.signing_name().as_deref().unwrap_or("glue"),
+                cfg.signing_region().as_deref(),
+            );
+
+            if let (Some(access_key_id), Some(secret_access_key)) =
+                (cfg.access_key_id(), cfg.secret_access_key())
+            {
+                sigv4_middleware = sigv4_middleware.with_credentials(
+                    access_key_id,
+                    secret_access_key,
+                    cfg.session_token(),
+                );
+            }
+
+            if let Some(role_arn) = cfg.role_arn() {
+                sigv4_middleware = sigv4_middleware.with_role(role_arn, cfg.role_session_name());
+            }
+
+            client_builder = client_builder.with(sigv4_middleware);
+        }
+
         Ok(HttpClient {
-            client: cfg.client().unwrap_or_default(),
+            client: client_builder.build(),
+
             token: Mutex::new(cfg.token()),
             token_endpoint: cfg.get_token_endpoint(),
             credential: cfg.credential(),
@@ -77,8 +107,26 @@ impl HttpClient {
             .then(|| cfg.extra_headers())
             .transpose()?
             .unwrap_or(self.extra_headers);
+
+        let client = match cfg.client() {
+            Some(client) => {
+                let mut client_builder = ClientBuilder::new(client);
+                #[cfg(feature = "sigv4")]
+                if cfg.sigv4_enabled() {
+                    client_builder =
+                        client_builder.with(crate::middleware::sigv4::SigV4Middleware::new(
+                            &cfg.base_url(),
+                            cfg.signing_name().as_deref().unwrap_or("glue"),
+                            cfg.signing_region().as_deref(),
+                        ));
+                }
+                client_builder.build()
+            }
+            None => ClientBuilder::from_client(self.client).build(),
+        };
+
         Ok(HttpClient {
-            client: cfg.client().unwrap_or(self.client),
+            client,
             token: Mutex::new(cfg.token().or_else(|| self.token.into_inner())),
             token_endpoint: if !cfg.get_token_endpoint().is_empty() {
                 cfg.get_token_endpoint()
