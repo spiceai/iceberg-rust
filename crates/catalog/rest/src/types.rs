@@ -23,8 +23,7 @@ use iceberg::{
 };
 use serde_derive::{Deserialize, Serialize};
 
-/// HTTP status code for OK.
-pub const OK: u16 = 200u16;
+pub(super) const OK: u16 = 200u16;
 pub(super) const NO_CONTENT: u16 = 204u16;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -33,9 +32,8 @@ pub(super) struct CatalogConfig {
     pub(super) defaults: HashMap<String, String>,
 }
 
-/// Response for request errors.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ErrorResponse {
+pub(super) struct ErrorResponse {
     error: ErrorModel,
 }
 
