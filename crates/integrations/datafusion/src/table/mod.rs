@@ -70,13 +70,8 @@ impl IcebergTableProvider {
     /// Asynchronously tries to construct a new [`IcebergTableProvider`]
     /// using the given client and table name to fetch an actual [`Table`]
     /// in the provided namespace.
-    pub async fn try_new(
-        client: Arc<dyn Catalog>,
-        namespace: NamespaceIdent,
-        name: impl Into<String>,
-    ) -> Result<Self> {
-        let ident = TableIdent::new(namespace, name.into());
-        let table = client.load_table(&ident).await?;
+    pub async fn try_new(client: Arc<dyn Catalog>, table_name: TableIdent) -> Result<Self> {
+        let table = client.load_table(&table_name).await?;
 
         let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
 
