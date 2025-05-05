@@ -27,10 +27,9 @@ use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::{DataFusionError, Result as DFResult};
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
-use futures::future::BoxFuture;
 use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::table::Table;
-use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
+use iceberg::{Catalog, Error, ErrorKind, Result, TableIdent};
 
 use crate::physical_plan::scan::IcebergTableScan;
 
@@ -142,9 +141,10 @@ impl TableProvider for IcebergTableProvider {
         filters: &[Expr],
         _limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
+        // Get the latest table metadata from the catalog if it exists
         let table = if let Some(catalog) = &self.catalog {
             catalog
-                .load_table(&self.table.identifier())
+                .load_table(self.table.identifier())
                 .await
                 .map_err(|e| {
                     DataFusionError::Execution(format!("Error getting Iceberg table metadata: {e}"))
