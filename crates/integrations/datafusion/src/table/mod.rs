@@ -163,7 +163,9 @@ impl TableProvider for IcebergTableProvider {
         _limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         let table = if let Some(table_fn) = &self.table_fn {
-            table_fn().await?
+            table_fn().await.map_err(|e| {
+                DataFusionError::Execution(format!("Error getting Iceberg table metadata: {e}"))
+            })?
         } else {
             self.table.clone()
         };
