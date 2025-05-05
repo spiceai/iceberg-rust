@@ -70,7 +70,7 @@ impl IcebergTableProvider {
     /// Asynchronously tries to construct a new [`IcebergTableProvider`]
     /// using the given client and table name to fetch an actual [`Table`]
     /// in the provided namespace.
-    pub(crate) async fn try_new(
+    pub async fn try_new(
         client: Arc<dyn Catalog>,
         namespace: NamespaceIdent,
         name: impl Into<String>,
