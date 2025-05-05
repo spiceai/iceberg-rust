@@ -44,8 +44,8 @@ pub struct IcebergTableProvider {
     snapshot_id: Option<i64>,
     /// A reference-counted arrow `Schema`.
     schema: ArrowSchemaRef,
-    /// A function that returns a future of the table metadata to query.
-    table_fn: Option<Arc<dyn Fn() -> BoxFuture<'static, Result<Table>> + Send + Sync>>,
+    /// A reference to the catalog that this table provider belongs to.
+    catalog: Option<Arc<dyn Catalog>>,
 }
 
 impl std::fmt::Debug for IcebergTableProvider {
@@ -64,7 +64,7 @@ impl IcebergTableProvider {
             table,
             snapshot_id: None,
             schema,
-            table_fn: None,
+            catalog: None,
         }
     }
     /// Asynchronously tries to construct a new [`IcebergTableProvider`]
@@ -83,7 +83,7 @@ impl IcebergTableProvider {
         Ok(IcebergTableProvider {
             table,
             snapshot_id: None,
-            table_fn: None,
+            catalog: Some(client),
             schema,
         })
     }
@@ -95,7 +95,7 @@ impl IcebergTableProvider {
         Ok(IcebergTableProvider {
             table,
             snapshot_id: None,
-            table_fn: None,
+            catalog: None,
             schema,
         })
     }
@@ -120,22 +120,7 @@ impl IcebergTableProvider {
         Ok(IcebergTableProvider {
             table,
             snapshot_id: Some(snapshot_id),
-            table_fn: None,
-            schema,
-        })
-    }
-
-    /// Asynchronously tries to construct a new [`IcebergTableProvider`]
-    /// using a specific snapshot of the given table. Can be used to create a table provider from an existing table regardless of the catalog implementation.
-    pub async fn try_new_from_table_fn(
-        table_fn: Arc<dyn Fn() -> BoxFuture<'static, Result<Table>> + Send + Sync>,
-    ) -> Result<Self> {
-        let table = table_fn().await?;
-        let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
-        Ok(IcebergTableProvider {
-            table,
-            snapshot_id: None,
-            table_fn: Some(table_fn),
+            catalog: None,
             schema,
         })
     }
@@ -162,10 +147,13 @@ impl TableProvider for IcebergTableProvider {
         filters: &[Expr],
         _limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
-        let table = if let Some(table_fn) = &self.table_fn {
-            table_fn().await.map_err(|e| {
-                DataFusionError::Execution(format!("Error getting Iceberg table metadata: {e}"))
-            })?
+        let table = if let Some(catalog) = &self.catalog {
+            catalog
+                .load_table(&self.table.identifier())
+                .await
+                .map_err(|e| {
+                    DataFusionError::Execution(format!("Error getting Iceberg table metadata: {e}"))
+                })?
         } else {
             self.table.clone()
         };
