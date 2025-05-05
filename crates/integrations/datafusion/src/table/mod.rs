@@ -44,8 +44,8 @@ pub struct IcebergTableProvider {
     snapshot_id: Option<i64>,
     /// A reference-counted arrow `Schema`.
     schema: ArrowSchemaRef,
-    /// A function that returns a future of the snapshot id to query.
-    snapshot_id_fn: Option<Arc<dyn Fn() -> BoxFuture<'static, Result<i64>> + Send + Sync>>,
+    /// A function that returns a future of the table metadata to query.
+    table_fn: Option<Arc<dyn Fn() -> BoxFuture<'static, Result<Table>> + Send + Sync>>,
 }
 
 impl std::fmt::Debug for IcebergTableProvider {
@@ -64,7 +64,7 @@ impl IcebergTableProvider {
             table,
             snapshot_id: None,
             schema,
-            snapshot_id_fn: None,
+            table_fn: None,
         }
     }
     /// Asynchronously tries to construct a new [`IcebergTableProvider`]
@@ -83,7 +83,7 @@ impl IcebergTableProvider {
         Ok(IcebergTableProvider {
             table,
             snapshot_id: None,
-            snapshot_id_fn: None,
+            table_fn: None,
             schema,
         })
     }
@@ -95,7 +95,7 @@ impl IcebergTableProvider {
         Ok(IcebergTableProvider {
             table,
             snapshot_id: None,
-            snapshot_id_fn: None,
+            table_fn: None,
             schema,
         })
     }
@@ -120,36 +120,22 @@ impl IcebergTableProvider {
         Ok(IcebergTableProvider {
             table,
             snapshot_id: Some(snapshot_id),
-            snapshot_id_fn: None,
+            table_fn: None,
             schema,
         })
     }
 
     /// Asynchronously tries to construct a new [`IcebergTableProvider`]
     /// using a specific snapshot of the given table. Can be used to create a table provider from an existing table regardless of the catalog implementation.
-    pub async fn try_new_from_table_snapshot_fn(
-        table: Table,
-        snapshot_fn: Arc<dyn Fn() -> BoxFuture<'static, Result<i64>> + Send + Sync>,
+    pub async fn try_new_from_table_fn(
+        table_fn: Arc<dyn Fn() -> BoxFuture<'static, Result<Table>> + Send + Sync>,
     ) -> Result<Self> {
-        let snapshot_id = snapshot_fn().await?;
-        let snapshot = table
-            .metadata()
-            .snapshot_by_id(snapshot_id)
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    format!(
-                        "snapshot id {snapshot_id} not found in table {}",
-                        table.identifier().name()
-                    ),
-                )
-            })?;
-        let schema = snapshot.schema(table.metadata())?;
-        let schema = Arc::new(schema_to_arrow_schema(&schema)?);
+        let table = table_fn().await?;
+        let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
         Ok(IcebergTableProvider {
             table,
             snapshot_id: None,
-            snapshot_id_fn: Some(snapshot_fn),
+            table_fn: Some(table_fn),
             schema,
         })
     }
@@ -176,15 +162,13 @@ impl TableProvider for IcebergTableProvider {
         filters: &[Expr],
         _limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
-        let snapshot_id = if let Some(snapshot_id_fn) = &self.snapshot_id_fn {
-            Some(snapshot_id_fn().await.map_err(|e| {
-                DataFusionError::Execution(format!("Error getting Iceberg snapshot id: {e}"))
-            })?)
+        let table = if let Some(table_fn) = &self.table_fn {
+            table_fn().await?
         } else {
-            self.snapshot_id
+            self.table.clone()
         };
         Ok(Arc::new(IcebergTableScan::new(
-            self.table.clone(),
+            table,
             self.snapshot_id,
             self.schema.clone(),
             projection,
