@@ -181,14 +181,16 @@ impl ViewMetadataBuilder {
     /// - The specified `version_id` does not exist.
     /// - The specified `version_id` is `-1` but no version has been added.
     pub fn set_current_version_id(mut self, mut version_id: i32) -> Result<Self> {
-        if version_id == Self::LAST_ADDED && self.last_added_version_id.is_none() {
-            version_id = self.last_added_version_id.ok_or_else(|| {
-                Error::new(
+        if version_id == Self::LAST_ADDED {
+            let Some(last_added_id) = self.last_added_version_id else {
+                return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Cannot set current version id to last added version: no version has been added.",
-                )
-            })?;
+                ));
+            };
+            version_id = last_added_id;
         }
+
         let version_id = version_id; // make immutable
 
         if version_id == self.metadata.current_version_id {
@@ -217,7 +219,20 @@ impl ViewMetadataBuilder {
             });
         }
 
-        self.history_entry = Some(version.log());
+        // Use the timestamp of the snapshot if it was added in this set of changes,
+        // otherwise use a current timestamp for the log. The view version was added
+        // by a past transaction.
+        let version_added_in_this_changes = self
+            .changes
+            .iter()
+            .any(|update| matches!(update, ViewUpdate::AddViewVersion { view_version } if view_version.version_id() == version_id));
+
+        let mut log = version.log();
+        if !version_added_in_this_changes {
+            log.set_timestamp_ms(Utc::now().timestamp_millis());
+        }
+
+        self.history_entry = Some(log);
 
         Ok(self)
     }
@@ -255,9 +270,8 @@ impl ViewMetadataBuilder {
             // in this case. I prefer to add changes as the state of the builder is
             // potentially mutated (`last_added_version_id`), thus we should record the change.
             if self.last_added_version_id != Some(version_id) {
-                self.changes.push(ViewUpdate::AddViewVersion {
-                    view_version: view_version.with_version_id(version_id),
-                });
+                self.changes
+                    .push(ViewUpdate::AddViewVersion { view_version });
                 self.last_added_version_id = Some(version_id);
             }
             return Ok(version_id);
@@ -291,7 +305,6 @@ impl ViewMetadataBuilder {
 
         require_unique_dialects(&view_version)?;
 
-        // ToDo Discuss: This check is not present in Java.
         // The `TableMetadataBuilder` uses these checks in multiple places - also in Java.
         // If we think delayed requests are a problem, I think we should also add it here.
         if let Some(last) = self.metadata.version_log.last() {
@@ -851,6 +864,54 @@ mod test {
     }
 
     #[test]
+    fn test_use_previously_added_version() {
+        let v2 = new_view_version(2, 1, "select 1 as count");
+        let v3 = new_view_version(3, 1, "select count(1) as count from t2");
+        let schema = Schema::builder().build().unwrap();
+
+        let log_v2 = ViewVersionLog::new(2, v2.timestamp_ms());
+        let log_v3 = ViewVersionLog::new(3, v3.timestamp_ms());
+
+        let metadata_v2 = builder_without_changes()
+            .set_current_version(v2.clone(), schema.clone())
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        // Log should use the exact timestamp of v1
+        assert_eq!(metadata_v2.version_log.last().unwrap(), &log_v2);
+
+        // Add second version, should use exact timestamp of v2
+        let metadata_v3 = metadata_v2
+            .into_builder()
+            .set_current_version(v3.clone(), schema)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        assert_eq!(metadata_v3.version_log[1..], vec![
+            log_v2.clone(),
+            log_v3.clone()
+        ]);
+
+        // Re-use Version 1, add a new log entry with a new timestamp
+        let metadata_v4 = metadata_v3
+            .into_builder()
+            .set_current_version_id(2)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        // Last entry should be equal to v2 but with an updated timestamp
+        let entry = metadata_v4.version_log.last().unwrap();
+        assert_eq!(entry.version_id(), 2);
+        assert!(entry.timestamp_ms() > v2.timestamp_ms());
+    }
+
+    #[test]
     fn test_assign_uuid() {
         let builder = builder_without_changes();
         let uuid = Uuid::now_v7();
@@ -1194,6 +1255,24 @@ mod test {
             .unwrap_err()
             .to_string()
             .contains("Cannot set current version to unknown version with id: 10"));
+    }
+
+    #[test]
+    fn test_set_current_version_to_last_added() {
+        let builder = builder_without_changes();
+        let v1 = new_view_version(2, 1, "select * from ns.tbl");
+        let v2 = new_view_version(3, 1, "select a,b from ns.tbl");
+        let meta = builder
+            .clone()
+            .add_version(v1)
+            .unwrap()
+            .add_version(v2)
+            .unwrap()
+            .set_current_version_id(-1)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(meta.metadata.current_version_id, 3);
     }
 
     #[test]

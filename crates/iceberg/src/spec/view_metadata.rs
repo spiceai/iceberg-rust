@@ -226,8 +226,14 @@ impl ViewVersionLog {
     }
 
     /// Returns the last updated timestamp as a DateTime<Utc> with millisecond precision.
-    pub fn timestamp(self) -> Result<DateTime<Utc>> {
+    pub fn timestamp(&self) -> Result<DateTime<Utc>> {
         timestamp_ms_to_utc(self.timestamp_ms)
+    }
+
+    /// Update the timestamp of this version log.
+    pub(crate) fn set_timestamp_ms(&mut self, timestamp_ms: i64) -> &mut Self {
+        self.timestamp_ms = timestamp_ms;
+        self
     }
 }
 

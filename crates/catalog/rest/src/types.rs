@@ -122,16 +122,21 @@ impl From<&Namespace> for NamespaceSerde {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub(super) struct ListNamespaceResponse {
     pub(super) namespaces: Vec<Vec<String>>,
+    #[serde(default)]
+    pub(super) next_page_token: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct UpdateNamespacePropsRequest {
     removals: Option<Vec<String>>,
     updates: Option<HashMap<String, String>>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct UpdateNamespacePropsResponse {
     updated: Vec<String>,
@@ -140,8 +145,11 @@ pub(super) struct UpdateNamespacePropsResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub(super) struct ListTableResponse {
     pub(super) identifiers: Vec<TableIdent>,
+    #[serde(default)]
+    pub(super) next_page_token: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
