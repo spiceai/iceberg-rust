@@ -169,14 +169,18 @@ impl ArrowReader {
         let parquet_file = file_io.new_input(&task.data_file_path)?;
         let (parquet_metadata, parquet_reader) =
             try_join!(parquet_file.metadata(), parquet_file.reader())?;
-        let parquet_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader);
 
         let should_load_page_index = row_selection_enabled && task.predicate.is_some();
+
+        let parquet_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader)
+            .with_preload_column_index(true)
+            .with_preload_offset_index(true)
+            .with_preload_page_index(should_load_page_index);
 
         // Start creating the record batch stream, which wraps the parquet file reader
         let mut record_batch_stream_builder = ParquetRecordBatchStreamBuilder::new_with_options(
             parquet_file_reader,
-            ArrowReaderOptions::new().with_page_index(should_load_page_index),
+            ArrowReaderOptions::new(),
         )
         .await?;
 
@@ -1130,29 +1134,74 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
 /// - `preload_offset_index`: Load the Offset Index as part of [`Self::get_metadata`].
 struct ArrowFileReader<R: FileRead> {
     meta: FileMetadata,
+    preload_column_index: bool,
+    preload_offset_index: bool,
+    preload_page_index: bool,
+    metadata_size_hint: Option<usize>,
     r: R,
 }
 
 impl<R: FileRead> ArrowFileReader<R> {
     /// Create a new ArrowFileReader
     fn new(meta: FileMetadata, r: R) -> Self {
-        Self { meta, r }
+        Self {
+            meta,
+            preload_column_index: false,
+            preload_offset_index: false,
+            preload_page_index: false,
+            metadata_size_hint: None,
+            r,
+        }
+    }
+
+    /// Enable or disable preloading of the column index
+    pub fn with_preload_column_index(mut self, preload: bool) -> Self {
+        self.preload_column_index = preload;
+        self
+    }
+
+    /// Enable or disable preloading of the offset index
+    pub fn with_preload_offset_index(mut self, preload: bool) -> Self {
+        self.preload_offset_index = preload;
+        self
+    }
+
+    /// Enable or disable preloading of the page index
+    pub fn with_preload_page_index(mut self, preload: bool) -> Self {
+        self.preload_page_index = preload;
+        self
+    }
+
+    /// Provide a hint as to the number of bytes to prefetch for parsing the Parquet metadata
+    ///
+    /// This hint can help reduce the number of fetch requests. For more details see the
+    /// [ParquetMetaDataReader documentation](https://docs.rs/parquet/latest/parquet/file/metadata/struct.ParquetMetaDataReader.html#method.with_prefetch_hint).
+    pub fn with_metadata_size_hint(mut self, hint: usize) -> Self {
+        self.metadata_size_hint = Some(hint);
+        self
     }
 }
 
 impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
-    fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
         Box::pin(
             self.r
-                .read(range.start as _..range.end as _)
+                .read(range.start..range.end)
                 .map_err(|err| parquet::errors::ParquetError::External(Box::new(err))),
         )
     }
 
-    fn get_metadata(&mut self) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
+    fn get_metadata(
+        &mut self,
+        _options: Option<&'_ ArrowReaderOptions>,
+    ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
         async move {
-            let reader = ParquetMetaDataReader::new();
-            let size = self.meta.size as usize;
+            let reader = ParquetMetaDataReader::new()
+                .with_prefetch_hint(self.metadata_size_hint)
+                .with_column_indexes(self.preload_column_index)
+                .with_page_indexes(self.preload_page_index)
+                .with_offset_indexes(self.preload_offset_index);
+            let size = self.meta.size;
             let meta = reader.load_and_finish(self, size).await?;
 
             Ok(Arc::new(meta))

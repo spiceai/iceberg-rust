@@ -234,7 +234,7 @@ mod tests {
                 partition_summaries: ListArray
                 [
                   StructArray
-                -- validity: 
+                -- validity:
                 [
                   valid,
                 ]
