@@ -21,7 +21,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use opendal::Operator;
+use opendal::{EntryMode, Lister, Operator};
 use url::Url;
 
 use super::storage::Storage;
@@ -166,6 +166,16 @@ impl FileIO {
             relative_path_pos,
         })
     }
+
+    /// Returns a `Operator::lister` for the given path.
+    ///
+    /// # Errors
+    ///
+    /// If the operator fails to create a lister for the given path or `FileIO`
+    pub async fn lister(&self, path: impl AsRef<str>) -> Result<Lister> {
+        let (op, root_uri) = self.inner.create_operator(&path)?;
+        Ok(op.lister(root_uri).await?)
+    }
 }
 
 /// Container for storing type-safe extensions used to configure underlying FileIO behavior.
@@ -287,6 +297,8 @@ impl FileIOBuilder {
 pub struct FileMetadata {
     /// The size of the file.
     pub size: u64,
+    /// The file mode.
+    pub mode: EntryMode,
 }
 
 /// Trait for reading file.
@@ -337,6 +349,7 @@ impl InputFile {
 
         Ok(FileMetadata {
             size: meta.content_length(),
+            mode: meta.mode(),
         })
     }
 
