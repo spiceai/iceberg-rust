@@ -42,6 +42,7 @@ pub(crate) struct ManifestFileContext {
 
     field_ids: Arc<Vec<i32>>,
     bound_predicates: Option<Arc<BoundPredicates>>,
+    limit: Option<usize>,
     object_cache: Arc<ObjectCache>,
     snapshot_schema: SchemaRef,
     expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
@@ -61,6 +62,7 @@ pub(crate) struct ManifestEntryContext {
     pub snapshot_schema: SchemaRef,
     pub delete_file_index: DeleteFileIndex,
     pub case_sensitive: bool,
+    pub limit: Option<usize>,
 }
 
 impl ManifestFileContext {
@@ -76,6 +78,7 @@ impl ManifestFileContext {
             mut sender,
             expression_evaluator_cache,
             delete_file_index,
+            limit,
             ..
         } = self;
 
@@ -92,6 +95,7 @@ impl ManifestFileContext {
                 snapshot_schema: snapshot_schema.clone(),
                 delete_file_index: delete_file_index.clone(),
                 case_sensitive: self.case_sensitive,
+                limit,
             };
 
             sender
@@ -139,6 +143,8 @@ impl ManifestEntryContext {
             // TODO: Extract name_mapping from table metadata property "schema.name-mapping.default"
             name_mapping: None,
             case_sensitive: self.case_sensitive,
+
+            limit: self.limit,
         })
     }
 }
@@ -153,6 +159,7 @@ pub(crate) struct PlanContext {
     pub snapshot_schema: SchemaRef,
     pub case_sensitive: bool,
     pub predicate: Option<Arc<Predicate>>,
+    pub limit: Option<usize>,
     pub snapshot_bound_predicate: Option<Arc<BoundPredicate>>,
     pub object_cache: Arc<ObjectCache>,
     pub field_ids: Arc<Vec<i32>>,
@@ -276,6 +283,7 @@ impl PlanContext {
             manifest_file: manifest_file.clone(),
             bound_predicates,
             sender,
+            limit: self.limit,
             object_cache: self.object_cache.clone(),
             snapshot_schema: self.snapshot_schema.clone(),
             field_ids: self.field_ids.clone(),

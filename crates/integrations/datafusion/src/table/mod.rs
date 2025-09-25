@@ -127,7 +127,7 @@ impl TableProvider for IcebergTableProvider {
         _state: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
-        _limit: Option<usize>,
+        limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         // Load fresh table metadata from catalog
         let table = self
@@ -143,6 +143,7 @@ impl TableProvider for IcebergTableProvider {
             self.schema.clone(),
             projection,
             filters,
+            limit,
         )))
     }
 
@@ -311,7 +312,7 @@ impl TableProvider for IcebergStaticTableProvider {
         _state: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
-        _limit: Option<usize>,
+        limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         // Use cached table (no refresh)
         Ok(Arc::new(IcebergTableScan::new(
@@ -320,6 +321,7 @@ impl TableProvider for IcebergStaticTableProvider {
             self.schema.clone(),
             projection,
             filters,
+            limit,
         )))
     }
 

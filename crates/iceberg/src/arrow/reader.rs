@@ -179,8 +179,9 @@ impl ArrowReader {
         row_group_filtering_enabled: bool,
         row_selection_enabled: bool,
     ) -> Result<ArrowRecordBatchStream> {
-        let should_load_page_index =
-            (row_selection_enabled && task.predicate.is_some()) || !task.deletes.is_empty();
+        let should_load_page_index = (row_selection_enabled && task.predicate.is_some())
+            || !task.deletes.is_empty()
+            || task.limit.is_some();
 
         let delete_filter_rx =
             delete_file_loader.load_deletes(&task.deletes, Arc::clone(&task.schema));
@@ -424,6 +425,10 @@ impl ArrowReader {
         if let Some(selected_row_group_indices) = selected_row_group_indices {
             record_batch_stream_builder =
                 record_batch_stream_builder.with_row_groups(selected_row_group_indices);
+        }
+
+        if let Some(limit) = task.limit {
+            record_batch_stream_builder = record_batch_stream_builder.with_limit(limit);
         }
 
         // Build the batch stream and send all the RecordBatches that it generates
@@ -2079,6 +2084,7 @@ message schema {
                 project_field_ids: vec![1],
                 predicate: Some(predicate.bind(schema, true).unwrap()),
                 deletes: vec![],
+                limit: None,
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
