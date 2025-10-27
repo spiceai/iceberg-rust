@@ -1393,8 +1393,12 @@ impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
         _options: Option<&'_ ArrowReaderOptions>,
     ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
         async move {
+            #[allow(deprecated)]
             let reader = ParquetMetaDataReader::new()
                 .with_prefetch_hint(self.metadata_size_hint)
+                // these are deprecated in arrow 56.2, but the new PageIndexPolicy isn't in 56.0
+                // so if we've specified a dependency of "56", we could end up with either 56.2 or 56.0
+                // if someone uses 56.0, suddenly this doesn't compile anymore!
                 .with_column_indexes(self.preload_column_index)
                 .with_page_indexes(self.preload_page_index)
                 .with_offset_indexes(self.preload_offset_index);

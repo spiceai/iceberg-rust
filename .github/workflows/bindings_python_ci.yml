@@ -23,18 +23,18 @@ on:
       - main
   pull_request:
     paths:
-      - '**'                                       # Include all files and directories in the repository by default.
-      - '!.github/ISSUE_TEMPLATE/**'               # Exclude files and directories that don't impact tests or code like templates, metadata, and documentation.
-      - '!scripts/**'
-      - '!website/**'
-      - '!.asf.yml'
-      - '!.gitattributes'
-      - '!.gitignore'
-      - '!CONTRIBUTING.md'
-      - '!CHANGELOG.md'
-      - '!LICENSE'
-      - '!NOTICE'
-      - '!README.md'
+      - "**" # Include all files and directories in the repository by default.
+      - "!.github/ISSUE_TEMPLATE/**" # Exclude files and directories that don't impact tests or code like templates, metadata, and documentation.
+      - "!scripts/**"
+      - "!website/**"
+      - "!.asf.yml"
+      - "!.gitattributes"
+      - "!.gitignore"
+      - "!CONTRIBUTING.md"
+      - "!CHANGELOG.md"
+      - "!LICENSE"
+      - "!NOTICE"
+      - "!README.md"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
@@ -91,6 +91,6 @@ jobs:
         shell: bash
         run: |
           set -e
-          pip install hatch==1.12.0
+          pip install hatch==1.14.2
           hatch run dev:pip install dist/pyiceberg_core-*.whl --force-reinstall
           hatch run dev:test

@@ -57,7 +57,6 @@ impl IcebergCommitExec {
         input: Arc<dyn ExecutionPlan>,
         schema: ArrowSchemaRef,
     ) -> Self {
-
         let count_schema = Self::make_count_schema();
 
         let plan_properties = Self::compute_properties(Arc::clone(&count_schema));
@@ -87,7 +86,10 @@ impl IcebergCommitExec {
         let count_array = Arc::new(UInt64Array::from(vec![count])) as ArrayRef;
 
         RecordBatch::try_from_iter_with_nullable(vec![("count", count_array, false)]).map_err(|e| {
-            DataFusionError::ArrowError(e, Some("Failed to make count batch!".to_string()))
+            DataFusionError::ArrowError(
+                Box::new(e),
+                Some("Failed to make count batch!".to_string()),
+            )
         })
     }
 
