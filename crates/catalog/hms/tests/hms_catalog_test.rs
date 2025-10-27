@@ -24,8 +24,11 @@ use std::sync::RwLock;
 use ctor::{ctor, dtor};
 use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
-use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation, TableIdent};
-use iceberg_catalog_hms::{HmsCatalog, HmsCatalogConfig, HmsThriftTransport};
+use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent, TableCreation, TableIdent};
+use iceberg_catalog_hms::{
+    HMS_CATALOG_PROP_THRIFT_TRANSPORT, HMS_CATALOG_PROP_URI, HMS_CATALOG_PROP_WAREHOUSE,
+    HmsCatalog, HmsCatalogBuilder, THRIFT_TRANSPORT_BUFFERED,
+};
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
 use port_scanner::scan_port_addr;
@@ -73,7 +76,24 @@ async fn get_catalog() -> HmsCatalog {
         sleep(std::time::Duration::from_millis(1000)).await;
     }
 
+    while !scan_port_addr(minio_socket_addr) {
+        info!("Waiting for 1s minio to ready...");
+        sleep(std::time::Duration::from_millis(1000)).await;
+    }
+
     let props = HashMap::from([
+        (
+            HMS_CATALOG_PROP_URI.to_string(),
+            hms_socket_addr.to_string(),
+        ),
+        (
+            HMS_CATALOG_PROP_THRIFT_TRANSPORT.to_string(),
+            THRIFT_TRANSPORT_BUFFERED.to_string(),
+        ),
+        (
+            HMS_CATALOG_PROP_WAREHOUSE.to_string(),
+            "s3a://warehouse/hive".to_string(),
+        ),
         (
             S3_ENDPOINT.to_string(),
             format!("http://{}", minio_socket_addr),
@@ -83,14 +103,28 @@ async fn get_catalog() -> HmsCatalog {
         (S3_REGION.to_string(), "us-east-1".to_string()),
     ]);
 
-    let config = HmsCatalogConfig::builder()
-        .address(hms_socket_addr.to_string())
-        .thrift_transport(HmsThriftTransport::Buffered)
-        .warehouse("s3a://warehouse/hive".to_string())
-        .props(props)
-        .build();
+    // Wait for bucket to actually exist
+    let file_io = iceberg::io::FileIO::from_path("s3a://")
+        .unwrap()
+        .with_props(props.clone())
+        .build()
+        .unwrap();
 
-    HmsCatalog::new(config).unwrap()
+    let mut retries = 0;
+    while retries < 30 {
+        if file_io.exists("s3a://warehouse/").await.unwrap_or(false) {
+            info!("S3 bucket 'warehouse' is ready");
+            break;
+        }
+        info!("Waiting for bucket creation... (attempt {})", retries + 1);
+        sleep(std::time::Duration::from_millis(1000)).await;
+        retries += 1;
+    }
+
+    HmsCatalogBuilder::default()
+        .load("hms", props)
+        .await
+        .unwrap()
 }
 
 async fn set_test_namespace(catalog: &HmsCatalog, namespace: &NamespaceIdent) -> Result<()> {
@@ -101,7 +135,7 @@ async fn set_test_namespace(catalog: &HmsCatalog, namespace: &NamespaceIdent) ->
     Ok(())
 }
 
-fn set_table_creation(location: impl ToString, name: impl ToString) -> Result<TableCreation> {
+fn set_table_creation(location: Option<String>, name: impl ToString) -> Result<TableCreation> {
     let schema = Schema::builder()
         .with_schema_id(0)
         .with_fields(vec![
@@ -110,20 +144,19 @@ fn set_table_creation(location: impl ToString, name: impl ToString) -> Result<Ta
         ])
         .build()?;
 
-    let creation = TableCreation::builder()
-        .location(location.to_string())
+    let builder = TableCreation::builder()
         .name(name.to_string())
         .properties(HashMap::new())
-        .schema(schema)
-        .build();
+        .location_opt(location)
+        .schema(schema);
 
-    Ok(creation)
+    Ok(builder.build())
 }
 
 #[tokio::test]
 async fn test_rename_table() -> Result<()> {
     let catalog = get_catalog().await;
-    let creation: TableCreation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    let creation: TableCreation = set_table_creation(None, "my_table")?;
     let namespace = Namespace::new(NamespaceIdent::new("test_rename_table".into()));
     set_test_namespace(&catalog, namespace.name()).await?;
 
@@ -143,7 +176,7 @@ async fn test_rename_table() -> Result<()> {
 #[tokio::test]
 async fn test_table_exists() -> Result<()> {
     let catalog = get_catalog().await;
-    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    let creation = set_table_creation(None, "my_table")?;
     let namespace = Namespace::new(NamespaceIdent::new("test_table_exists".into()));
     set_test_namespace(&catalog, namespace.name()).await?;
 
@@ -159,7 +192,7 @@ async fn test_table_exists() -> Result<()> {
 #[tokio::test]
 async fn test_drop_table() -> Result<()> {
     let catalog = get_catalog().await;
-    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    let creation = set_table_creation(None, "my_table")?;
     let namespace = Namespace::new(NamespaceIdent::new("test_drop_table".into()));
     set_test_namespace(&catalog, namespace.name()).await?;
 
@@ -177,7 +210,7 @@ async fn test_drop_table() -> Result<()> {
 #[tokio::test]
 async fn test_load_table() -> Result<()> {
     let catalog = get_catalog().await;
-    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    let creation = set_table_creation(None, "my_table")?;
     let namespace = Namespace::new(NamespaceIdent::new("test_load_table".into()));
     set_test_namespace(&catalog, namespace.name()).await?;
 
@@ -200,16 +233,19 @@ async fn test_load_table() -> Result<()> {
 #[tokio::test]
 async fn test_create_table() -> Result<()> {
     let catalog = get_catalog().await;
-    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    // inject custom location, ignore the namespace prefix
+    let creation = set_table_creation(Some("s3a://warehouse/hive".into()), "my_table")?;
     let namespace = Namespace::new(NamespaceIdent::new("test_create_table".into()));
     set_test_namespace(&catalog, namespace.name()).await?;
 
     let result = catalog.create_table(namespace.name(), creation).await?;
 
     assert_eq!(result.identifier().name(), "my_table");
-    assert!(result
-        .metadata_location()
-        .is_some_and(|location| location.starts_with("s3a://warehouse/hive/metadata/00000-")));
+    assert!(
+        result
+            .metadata_location()
+            .is_some_and(|location| location.starts_with("s3a://warehouse/hive/metadata/00000-"))
+    );
     assert!(
         catalog
             .file_io()
@@ -229,7 +265,7 @@ async fn test_list_tables() -> Result<()> {
 
     assert_eq!(result, vec![]);
 
-    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    let creation = set_table_creation(None, "my_table")?;
     catalog.create_table(ns.name(), creation).await?;
     let result = catalog.list_tables(ns.name()).await?;
 

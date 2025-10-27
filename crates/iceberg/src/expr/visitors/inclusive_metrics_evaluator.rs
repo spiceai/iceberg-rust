@@ -17,7 +17,7 @@
 
 use fnv::FnvHashSet;
 
-use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
+use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::spec::{DataFile, Datum, PrimitiveLiteral};
 use crate::{Error, ErrorKind};
@@ -485,11 +485,11 @@ mod test {
 
     use fnv::FnvHashSet;
 
-    use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
     use crate::expr::PredicateOperator::{
         Eq, GreaterThan, GreaterThanOrEq, In, IsNan, IsNull, LessThan, LessThanOrEq, NotEq, NotIn,
         NotNan, NotNull, NotStartsWith, StartsWith,
     };
+    use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
     use crate::expr::{
         BinaryExpression, Bind, BoundPredicate, Predicate, Reference, SetExpression,
         UnaryExpression,
@@ -1659,12 +1659,14 @@ mod test {
 
         let partition_spec = PartitionSpec::builder(table_schema_ref.clone())
             .with_spec_id(1)
-            .add_unbound_fields(vec![UnboundPartitionField::builder()
-                .source_id(1)
-                .name("a".to_string())
-                .field_id(1)
-                .transform(Transform::Identity)
-                .build()])
+            .add_unbound_fields(vec![
+                UnboundPartitionField::builder()
+                    .source_id(1)
+                    .name("a".to_string())
+                    .field_id(1)
+                    .transform(Transform::Identity)
+                    .build(),
+            ])
             .unwrap()
             .build()
             .unwrap();
@@ -1994,7 +1996,7 @@ mod test {
             upper_bounds: Default::default(),
             key_metadata: None,
             split_offsets: vec![],
-            equality_ids: vec![],
+            equality_ids: None,
             sort_order_id: None,
             partition_spec_id: 0,
             first_row_id: None,
@@ -2020,7 +2022,7 @@ mod test {
             upper_bounds: Default::default(),
             key_metadata: None,
             split_offsets: vec![],
-            equality_ids: vec![],
+            equality_ids: None,
             sort_order_id: None,
             partition_spec_id: 0,
             first_row_id: None,
@@ -2082,7 +2084,7 @@ mod test {
             column_sizes: Default::default(),
             key_metadata: None,
             split_offsets: vec![],
-            equality_ids: vec![],
+            equality_ids: None,
             sort_order_id: None,
             partition_spec_id: 0,
             first_row_id: None,
@@ -2113,7 +2115,7 @@ mod test {
             column_sizes: Default::default(),
             key_metadata: None,
             split_offsets: vec![],
-            equality_ids: vec![],
+            equality_ids: None,
             sort_order_id: None,
             partition_spec_id: 0,
             first_row_id: None,
@@ -2145,7 +2147,7 @@ mod test {
             column_sizes: Default::default(),
             key_metadata: None,
             split_offsets: vec![],
-            equality_ids: vec![],
+            equality_ids: None,
             sort_order_id: None,
             partition_spec_id: 0,
             first_row_id: None,
@@ -2177,7 +2179,7 @@ mod test {
             column_sizes: Default::default(),
             key_metadata: None,
             split_offsets: vec![],
-            equality_ids: vec![],
+            equality_ids: None,
             sort_order_id: None,
             partition_spec_id: 0,
             first_row_id: None,

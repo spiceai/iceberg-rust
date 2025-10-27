@@ -20,12 +20,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_array::types::{
-    validate_decimal_precision_and_scale, Decimal128Type, TimestampMicrosecondType,
-};
+use arrow_array::types::{Decimal128Type, validate_decimal_precision_and_scale};
 use arrow_array::{
-    BooleanArray, Date32Array, Datum as ArrowDatum, Float32Array, Float64Array, Int32Array,
-    Int64Array, PrimitiveArray, Scalar, StringArray, TimestampMicrosecondArray,
+    BooleanArray, Date32Array, Datum as ArrowDatum, Decimal128Array, FixedSizeBinaryArray,
+    Float32Array, Float64Array, Int32Array, Int64Array, Scalar, StringArray,
+    TimestampMicrosecondArray,
 };
 use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
 use num_bigint::BigInt;
@@ -307,7 +306,7 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "List type must have list data type",
-                ))
+                ));
             }
         };
 
@@ -379,7 +378,16 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             DataType::Int8 | DataType::Int16 | DataType::Int32 => {
                 Ok(Type::Primitive(PrimitiveType::Int))
             }
+            DataType::UInt8 | DataType::UInt16 => Ok(Type::Primitive(PrimitiveType::Int)),
+            DataType::UInt32 => Ok(Type::Primitive(PrimitiveType::Long)),
             DataType::Int64 => Ok(Type::Primitive(PrimitiveType::Long)),
+            DataType::UInt64 => {
+                // Block uint64 - no safe casting option
+                Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "UInt64 is not supported. Use Int64 for values ≤ 9,223,372,036,854,775,807 or Decimal(20,0) for full uint64 range.",
+                ))
+            }
             DataType::Float32 => Ok(Type::Primitive(PrimitiveType::Float)),
             DataType::Float64 => Ok(Type::Primitive(PrimitiveType::Double)),
             DataType::Decimal128(p, s) => Type::decimal(*p as u32, *s as u32).map_err(|e| {
@@ -650,36 +658,46 @@ pub fn type_to_arrow_type(ty: &crate::spec::Type) -> crate::Result<DataType> {
 }
 
 /// Convert Iceberg Datum to Arrow Datum.
-pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Box<dyn ArrowDatum + Send>> {
+pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Arc<dyn ArrowDatum + Send + Sync>> {
     match (datum.data_type(), datum.literal()) {
         (PrimitiveType::Boolean, PrimitiveLiteral::Boolean(value)) => {
-            Ok(Box::new(BooleanArray::new_scalar(*value)))
+            Ok(Arc::new(BooleanArray::new_scalar(*value)))
         }
         (PrimitiveType::Int, PrimitiveLiteral::Int(value)) => {
-            Ok(Box::new(Int32Array::new_scalar(*value)))
+            Ok(Arc::new(Int32Array::new_scalar(*value)))
         }
         (PrimitiveType::Long, PrimitiveLiteral::Long(value)) => {
-            Ok(Box::new(Int64Array::new_scalar(*value)))
+            Ok(Arc::new(Int64Array::new_scalar(*value)))
         }
         (PrimitiveType::Float, PrimitiveLiteral::Float(value)) => {
-            Ok(Box::new(Float32Array::new_scalar(value.to_f32().unwrap())))
+            Ok(Arc::new(Float32Array::new_scalar(value.to_f32().unwrap())))
         }
         (PrimitiveType::Double, PrimitiveLiteral::Double(value)) => {
-            Ok(Box::new(Float64Array::new_scalar(value.to_f64().unwrap())))
+            Ok(Arc::new(Float64Array::new_scalar(value.to_f64().unwrap())))
         }
         (PrimitiveType::String, PrimitiveLiteral::String(value)) => {
-            Ok(Box::new(StringArray::new_scalar(value.as_str())))
+            Ok(Arc::new(StringArray::new_scalar(value.as_str())))
         }
         (PrimitiveType::Date, PrimitiveLiteral::Int(value)) => {
-            Ok(Box::new(Date32Array::new_scalar(*value)))
+            Ok(Arc::new(Date32Array::new_scalar(*value)))
         }
         (PrimitiveType::Timestamp, PrimitiveLiteral::Long(value)) => {
-            Ok(Box::new(TimestampMicrosecondArray::new_scalar(*value)))
+            Ok(Arc::new(TimestampMicrosecondArray::new_scalar(*value)))
         }
-        (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(value)) => Ok(Box::new(Scalar::new(
-            PrimitiveArray::<TimestampMicrosecondType>::new(vec![*value; 1].into(), None)
-                .with_timezone("UTC"),
+        (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(value)) => Ok(Arc::new(Scalar::new(
+            TimestampMicrosecondArray::new(vec![*value; 1].into(), None).with_timezone_utc(),
         ))),
+        (PrimitiveType::Decimal { precision, scale }, PrimitiveLiteral::Int128(value)) => {
+            let array = Decimal128Array::from_value(*value, 1)
+                .with_precision_and_scale(*precision as _, *scale as _)
+                .unwrap();
+            Ok(Arc::new(Scalar::new(array)))
+        }
+        (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(value)) => {
+            let bytes = Uuid::from_u128(*value).into_bytes();
+            let array = FixedSizeBinaryArray::try_from_iter(vec![bytes].into_iter()).unwrap();
+            Ok(Arc::new(Scalar::new(array)))
+        }
 
         (primitive_type, _) => Err(Error::new(
             ErrorKind::FeatureUnsupported,
@@ -830,7 +848,7 @@ pub(crate) fn get_parquet_stat_min_as_datum(
         (PrimitiveType::Binary, Statistics::ByteArray(stat)) => {
             return Ok(stat
                 .min_bytes_opt()
-                .map(|bytes| Datum::binary(bytes.to_vec())))
+                .map(|bytes| Datum::binary(bytes.to_vec())));
         }
         _ => {
             return Ok(None);
@@ -977,7 +995,7 @@ pub(crate) fn get_parquet_stat_max_as_datum(
         (PrimitiveType::Binary, Statistics::ByteArray(stat)) => {
             return Ok(stat
                 .max_bytes_opt()
-                .map(|bytes| Datum::binary(bytes.to_vec())))
+                .map(|bytes| Datum::binary(bytes.to_vec())));
         }
         _ => {
             return Ok(None);
@@ -1007,6 +1025,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
+    use rust_decimal::Decimal;
 
     use super::*;
     use crate::spec::{Literal, Schema};
@@ -1687,6 +1706,170 @@ mod tests {
                 .into(),
             ]));
             assert_eq!(arrow_type, type_to_arrow_type(&iceberg_type).unwrap());
+        }
+
+        // test dictionary type
+        {
+            let arrow_type =
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int8));
+            let iceberg_type = Type::Primitive(PrimitiveType::Int);
+            assert_eq!(
+                iceberg_type,
+                arrow_type_to_type(&arrow_type).unwrap(),
+                "Expected dictionary conversion to use the contained value"
+            );
+
+            let arrow_type =
+                DataType::Dictionary(Box::new(DataType::Utf8), Box::new(DataType::Boolean));
+            let iceberg_type = Type::Primitive(PrimitiveType::Boolean);
+            assert_eq!(iceberg_type, arrow_type_to_type(&arrow_type).unwrap());
+        }
+    }
+
+    #[test]
+    fn test_unsigned_integer_type_conversion() {
+        let test_cases = vec![
+            (DataType::UInt8, PrimitiveType::Int),
+            (DataType::UInt16, PrimitiveType::Int),
+            (DataType::UInt32, PrimitiveType::Long),
+        ];
+
+        for (arrow_type, expected_iceberg_type) in test_cases {
+            let arrow_field = Field::new("test", arrow_type.clone(), false).with_metadata(
+                HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())]),
+            );
+            let arrow_schema = ArrowSchema::new(vec![arrow_field]);
+
+            let iceberg_schema = arrow_schema_to_schema(&arrow_schema).unwrap();
+            let iceberg_field = iceberg_schema.as_struct().fields().first().unwrap();
+
+            assert!(
+                matches!(iceberg_field.field_type.as_ref(), Type::Primitive(t) if *t == expected_iceberg_type),
+                "Expected {:?} to map to {:?}",
+                arrow_type,
+                expected_iceberg_type
+            );
+        }
+
+        // Test UInt64 blocking
+        {
+            let arrow_field = Field::new("test", DataType::UInt64, false).with_metadata(
+                HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())]),
+            );
+            let arrow_schema = ArrowSchema::new(vec![arrow_field]);
+
+            let result = arrow_schema_to_schema(&arrow_schema);
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("UInt64 is not supported")
+            );
+        }
+    }
+
+    #[test]
+    fn test_datum_conversion() {
+        {
+            let datum = Datum::bool(true);
+            let arrow_datum = get_arrow_datum(&datum).unwrap();
+            let (array, is_scalar) = arrow_datum.get();
+            let array = array.as_any().downcast_ref::<BooleanArray>().unwrap();
+            assert!(is_scalar);
+            assert!(array.value(0));
+        }
+        {
+            let datum = Datum::int(42);
+            let arrow_datum = get_arrow_datum(&datum).unwrap();
+            let (array, is_scalar) = arrow_datum.get();
+            let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
+            assert!(is_scalar);
+            assert_eq!(array.value(0), 42);
+        }
+        {
+            let datum = Datum::long(42);
+            let arrow_datum = get_arrow_datum(&datum).unwrap();
+            let (array, is_scalar) = arrow_datum.get();
+            let array = array.as_any().downcast_ref::<Int64Array>().unwrap();
+            assert!(is_scalar);
+            assert_eq!(array.value(0), 42);
+        }
+        {
+            let datum = Datum::float(42.42);
+            let arrow_datum = get_arrow_datum(&datum).unwrap();
+            let (array, is_scalar) = arrow_datum.get();
+            let array = array.as_any().downcast_ref::<Float32Array>().unwrap();
+            assert!(is_scalar);
+            assert_eq!(array.value(0), 42.42);
+        }
+        {
+            let datum = Datum::double(42.42);
+            let arrow_datum = get_arrow_datum(&datum).unwrap();
+            let (array, is_scalar) = arrow_datum.get();
+            let array = array.as_any().downcast_ref::<Float64Array>().unwrap();
+            assert!(is_scalar);
+            assert_eq!(array.value(0), 42.42);
+        }
+        {
+            let datum = Datum::string("abc");
+            let arrow_datum = get_arrow_datum(&datum).unwrap();
+            let (array, is_scalar) = arrow_datum.get();
+            let array = array.as_any().downcast_ref::<StringArray>().unwrap();
+            assert!(is_scalar);
+            assert_eq!(array.value(0), "abc");
+        }
+        {
+            let datum = Datum::date(42);
+            let arrow_datum = get_arrow_datum(&datum).unwrap();
+            let (array, is_scalar) = arrow_datum.get();
+            let array = array.as_any().downcast_ref::<Date32Array>().unwrap();
+            assert!(is_scalar);
+            assert_eq!(array.value(0), 42);
+        }
+        {
+            let datum = Datum::timestamp_micros(42);
+            let arrow_datum = get_arrow_datum(&datum).unwrap();
+            let (array, is_scalar) = arrow_datum.get();
+            let array = array
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .unwrap();
+            assert!(is_scalar);
+            assert_eq!(array.value(0), 42);
+        }
+        {
+            let datum = Datum::timestamptz_micros(42);
+            let arrow_datum = get_arrow_datum(&datum).unwrap();
+            let (array, is_scalar) = arrow_datum.get();
+            let array = array
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .unwrap();
+            assert!(is_scalar);
+            assert_eq!(array.timezone(), Some("+00:00"));
+            assert_eq!(array.value(0), 42);
+        }
+        {
+            let datum = Datum::decimal_with_precision(Decimal::new(123, 2), 30).unwrap();
+            let arrow_datum = get_arrow_datum(&datum).unwrap();
+            let (array, is_scalar) = arrow_datum.get();
+            let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            assert!(is_scalar);
+            assert_eq!(array.precision(), 30);
+            assert_eq!(array.scale(), 2);
+            assert_eq!(array.value(0), 123);
+        }
+        {
+            let datum = Datum::uuid_from_str("42424242-4242-4242-4242-424242424242").unwrap();
+            let arrow_datum = get_arrow_datum(&datum).unwrap();
+            let (array, is_scalar) = arrow_datum.get();
+            let array = array
+                .as_any()
+                .downcast_ref::<FixedSizeBinaryArray>()
+                .unwrap();
+            assert!(is_scalar);
+            assert_eq!(array.value(0), [66u8; 16]);
         }
     }
 }

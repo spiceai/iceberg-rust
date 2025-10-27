@@ -729,11 +729,13 @@ mod tests {
 
         let partition_spec = Arc::new(
             PartitionSpec::builder(schema.clone())
-                .add_unbound_fields(vec![UnboundPartitionField::builder()
-                    .source_id(2)
-                    .name("year".to_string())
-                    .transform(Transform::Identity)
-                    .build()])
+                .add_unbound_fields(vec![
+                    UnboundPartitionField::builder()
+                        .source_id(2)
+                        .name("year".to_string())
+                        .transform(Transform::Identity)
+                        .build(),
+                ])
                 .unwrap()
                 .with_spec_id(1)
                 .build()
@@ -766,7 +768,7 @@ mod tests {
             ]),
             key_metadata: None,
             split_offsets: vec![4],
-            equality_ids: vec![],
+            equality_ids: None,
             sort_order_id: Some(0),
             partition_spec_id: 0,
             first_row_id: None,
@@ -798,7 +800,7 @@ mod tests {
             ]),
             key_metadata: None,
             split_offsets: vec![4],
-            equality_ids: vec![],
+            equality_ids: None,
             sort_order_id: Some(0),
             partition_spec_id: 0,
             first_row_id: None,
@@ -817,7 +819,7 @@ mod tests {
         assert_eq!(props.get(ADDED_FILE_SIZE).unwrap(), "300");
         assert_eq!(props.get(REMOVED_FILE_SIZE).unwrap(), "100");
 
-        let partition_key = format!("{}{}", CHANGED_PARTITION_PREFIX, "year=\"2025\"");
+        let partition_key = format!("{}{}", CHANGED_PARTITION_PREFIX, "year=2025");
 
         assert!(props.contains_key(&partition_key));
 
@@ -846,8 +848,8 @@ mod tests {
             added_rows_count: Some(100),
             existing_rows_count: Some(0),
             deleted_rows_count: Some(50),
-            partitions: Vec::new(),
-            key_metadata: Vec::new(),
+            partitions: Some(Vec::new()),
+            key_metadata: None,
         };
 
         collector
@@ -876,11 +878,13 @@ mod tests {
 
         let partition_spec = Arc::new(
             PartitionSpec::builder(schema.clone())
-                .add_unbound_fields(vec![UnboundPartitionField::builder()
-                    .source_id(2)
-                    .name("year".to_string())
-                    .transform(Transform::Identity)
-                    .build()])
+                .add_unbound_fields(vec![
+                    UnboundPartitionField::builder()
+                        .source_id(2)
+                        .name("year".to_string())
+                        .transform(Transform::Identity)
+                        .build(),
+                ])
                 .unwrap()
                 .with_spec_id(1)
                 .build()
@@ -906,7 +910,7 @@ mod tests {
                 upper_bounds: HashMap::new(),
                 key_metadata: None,
                 split_offsets: vec![],
-                equality_ids: vec![],
+                equality_ids: None,
                 sort_order_id: None,
                 partition_spec_id: 0,
                 first_row_id: None,
@@ -934,7 +938,7 @@ mod tests {
                 upper_bounds: HashMap::new(),
                 key_metadata: None,
                 split_offsets: vec![],
-                equality_ids: vec![],
+                equality_ids: None,
                 sort_order_id: None,
                 partition_spec_id: 0,
                 first_row_id: None,
@@ -968,8 +972,8 @@ mod tests {
             added_rows_count: Some(5),
             existing_rows_count: Some(0),
             deleted_rows_count: Some(0),
-            partitions: Vec::new(),
-            key_metadata: Vec::new(),
+            partitions: Some(Vec::new()),
+            key_metadata: None,
         });
 
         summary_four.add_file(
@@ -988,7 +992,7 @@ mod tests {
                 upper_bounds: HashMap::new(),
                 key_metadata: None,
                 split_offsets: vec![],
-                equality_ids: vec![],
+                equality_ids: None,
                 sort_order_id: None,
                 partition_spec_id: 0,
                 first_row_id: None,
@@ -1005,8 +1009,10 @@ mod tests {
 
         assert_eq!(props.get(ADDED_DATA_FILES).unwrap(), "2");
         assert_eq!(props.get(ADDED_RECORDS).unwrap(), "6");
-        assert!(props
-            .iter()
-            .all(|(k, _)| !k.starts_with(CHANGED_PARTITION_PREFIX)));
+        assert!(
+            props
+                .iter()
+                .all(|(k, _)| !k.starts_with(CHANGED_PARTITION_PREFIX))
+        );
     }
 }

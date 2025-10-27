@@ -25,15 +25,15 @@ use fnv::FnvHashSet;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{Datum, PrimitiveLiteral};
+use crate::ErrorKind;
 use crate::error::{Error, Result};
 use crate::expr::{
     BinaryExpression, BoundPredicate, BoundReference, Predicate, PredicateOperator, Reference,
     SetExpression, UnaryExpression,
 };
-use crate::spec::datatypes::{PrimitiveType, Type};
 use crate::spec::Literal;
-use crate::transform::{create_transform_function, BoxedTransformFunction};
-use crate::ErrorKind;
+use crate::spec::datatypes::{PrimitiveType, Type};
+use crate::transform::{BoxedTransformFunction, create_transform_function};
 
 /// Transform is used to transform predicates to partition predicates,
 /// in addition to transforming data values.
@@ -137,19 +137,17 @@ pub enum Transform {
 impl Transform {
     /// Returns a human-readable String representation of a transformed value.
     pub fn to_human_string(&self, field_type: &Type, value: Option<&Literal>) -> String {
-        if let Some(value) = value {
-            if let Some(value) = value.as_primitive_literal() {
-                let field_type = field_type.as_primitive_type().unwrap();
-                let datum = Datum::new(field_type.clone(), value);
-                match self {
-                    Self::Identity => datum.to_string(),
-                    Self::Void => "null".to_string(),
-                    _ => {
-                        todo!()
-                    }
-                }
-            } else {
-                "null".to_string()
+        let Some(value) = value else {
+            return "null".to_string();
+        };
+
+        if let Some(value) = value.as_primitive_literal() {
+            let field_type = field_type.as_primitive_type().unwrap();
+            let datum = Datum::new(field_type.clone(), value);
+
+            match self {
+                Self::Void => "null".to_string(),
+                _ => datum.to_human_string(),
             }
         } else {
             "null".to_string()
@@ -384,7 +382,7 @@ impl Transform {
                                         "Expected a string or binary literal, got: {:?}",
                                         expr.literal()
                                     ),
-                                ))
+                                ));
                             }
                         };
                         match len.cmp(&(*width as usize)) {
@@ -411,7 +409,7 @@ impl Transform {
                                         "Expected a string or binary literal, got: {:?}",
                                         expr.literal()
                                     ),
-                                ))
+                                ));
                             }
                         };
                         match len.cmp(&(*width as usize)) {
@@ -770,7 +768,7 @@ impl Transform {
                             // An ugly hack to fix. Refine the increment and decrement logic later.
                             match self {
                                 Transform::Day => {
-                                    return Some(AdjustedProjection::Single(Datum::date(v + 1)))
+                                    return Some(AdjustedProjection::Single(Datum::date(v + 1)));
                                 }
                                 _ => {
                                     return Some(AdjustedProjection::Single(Datum::int(v + 1)));
@@ -1031,7 +1029,7 @@ impl FromStr for Transform {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!("transform {v:?} is invalid"),
-                ))
+                ));
             }
         };
 

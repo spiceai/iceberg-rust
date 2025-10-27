@@ -26,10 +26,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
-use super::view_metadata::ViewVersionLog;
 use super::INITIAL_VIEW_VERSION_ID;
+use super::view_metadata::ViewVersionLog;
 use crate::catalog::NamespaceIdent;
-use crate::error::{timestamp_ms_to_utc, Result};
+use crate::error::{Result, timestamp_ms_to_utc};
 use crate::spec::{SchemaId, SchemaRef, ViewMetadata};
 use crate::{Error, ErrorKind};
 
@@ -114,7 +114,7 @@ impl ViewVersion {
 
     /// Get the schema of this snapshot.
     pub fn schema(&self, view_metadata: &ViewMetadata) -> Result<SchemaRef> {
-        let r = view_metadata
+        view_metadata
             .schema_by_id(self.schema_id())
             .ok_or_else(|| {
                 Error::new(
@@ -122,8 +122,7 @@ impl ViewVersion {
                     format!("Schema with id {} not found", self.schema_id()),
                 )
             })
-            .cloned();
-        r
+            .cloned()
     }
 
     /// Retrieve the history log entry for this view version.
@@ -279,10 +278,10 @@ impl From<SqlViewRepresentation> for ViewRepresentation {
 mod tests {
     use chrono::{TimeZone, Utc};
 
-    use crate::spec::view_version::ViewVersion;
-    use crate::spec::view_version::_serde::ViewVersionV1;
-    use crate::spec::ViewRepresentations;
     use crate::NamespaceIdent;
+    use crate::spec::ViewRepresentations;
+    use crate::spec::view_version::_serde::ViewVersionV1;
+    use crate::spec::view_version::ViewVersion;
 
     #[test]
     fn view_version() {
@@ -335,10 +334,9 @@ mod tests {
                 },
             )])
         );
-        assert_eq!(
-            result.default_namespace.inner(),
-            vec!["default".to_string()]
-        );
+        assert_eq!(result.default_namespace.inner(), vec![
+            "default".to_string()
+        ]);
     }
 
     #[test]

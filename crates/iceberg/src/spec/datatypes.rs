@@ -26,14 +26,14 @@ use std::sync::{Arc, OnceLock};
 
 use ::serde::de::{MapAccess, Visitor};
 use serde::de::{Error, IntoDeserializer};
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::Value as JsonValue;
 
 use super::values::Literal;
 use crate::ensure_data_valid;
 use crate::error::Result;
-use crate::spec::datatypes::_decimal::{MAX_PRECISION, REQUIRED_LENGTH};
 use crate::spec::PrimitiveLiteral;
+use crate::spec::datatypes::_decimal::{MAX_PRECISION, REQUIRED_LENGTH};
 
 /// Field name for list type.
 pub const LIST_FIELD_NAME: &str = "element";
@@ -153,14 +153,20 @@ impl Type {
     /// Returns minimum bytes required for decimal with [`precision`].
     #[inline(always)]
     pub fn decimal_required_bytes(precision: u32) -> Result<u32> {
-        ensure_data_valid!(precision > 0 && precision <= MAX_DECIMAL_PRECISION, "Decimals with precision larger than {MAX_DECIMAL_PRECISION} are not supported: {precision}",);
+        ensure_data_valid!(
+            precision > 0 && precision <= MAX_DECIMAL_PRECISION,
+            "Decimals with precision larger than {MAX_DECIMAL_PRECISION} are not supported: {precision}",
+        );
         Ok(REQUIRED_LENGTH[precision as usize - 1])
     }
 
     /// Creates  decimal type.
     #[inline(always)]
     pub fn decimal(precision: u32, scale: u32) -> Result<Self> {
-        ensure_data_valid!(precision > 0 && precision <= MAX_DECIMAL_PRECISION, "Decimals with precision larger than {MAX_DECIMAL_PRECISION} are not supported: {precision}",);
+        ensure_data_valid!(
+            precision > 0 && precision <= MAX_DECIMAL_PRECISION,
+            "Decimals with precision larger than {MAX_DECIMAL_PRECISION} are not supported: {precision}",
+        );
         Ok(Type::Primitive(PrimitiveType::Decimal { precision, scale }))
     }
 
@@ -712,7 +718,7 @@ pub(super) mod _serde {
         },
         Struct {
             r#type: String,
-            fields: Cow<'a, Vec<NestedFieldRef>>,
+            fields: Cow<'a, [NestedFieldRef]>,
         },
         #[serde(rename_all = "kebab-case")]
         Map {
@@ -1171,7 +1177,7 @@ mod tests {
     }
 
     #[test]
-    fn test_primitive_type_compatitable() {
+    fn test_primitive_type_compatible() {
         let pairs = vec![
             (PrimitiveType::Boolean, PrimitiveLiteral::Boolean(true)),
             (PrimitiveType::Int, PrimitiveLiteral::Int(1)),

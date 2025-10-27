@@ -21,12 +21,11 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use super::{
-    FormatVersion, MetadataLog, PartitionSpec, PartitionSpecBuilder, PartitionStatisticsFile,
-    Schema, SchemaRef, Snapshot, SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder,
-    SortOrderRef, StatisticsFile, StructType, TableMetadata, UnboundPartitionSpec,
-    DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, MAIN_BRANCH, ONE_MINUTE_MS,
-    PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX, PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT,
-    RESERVED_PROPERTIES, UNPARTITIONED_LAST_ASSIGNED_ID,
+    DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, FormatVersion, MAIN_BRANCH, MetadataLog,
+    ONE_MINUTE_MS, PartitionSpec, PartitionSpecBuilder, PartitionStatisticsFile, Schema, SchemaRef,
+    Snapshot, SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder, SortOrderRef,
+    StatisticsFile, StructType, TableMetadata, TableProperties, UNPARTITIONED_LAST_ASSIGNED_ID,
+    UnboundPartitionSpec,
 };
 use crate::error::{Error, ErrorKind, Result};
 use crate::{TableCreation, TableUpdate};
@@ -120,6 +119,7 @@ impl TableMetadataBuilder {
                 refs: HashMap::default(),
                 statistics: HashMap::new(),
                 partition_statistics: HashMap::new(),
+                encryption_keys: HashMap::new(),
             },
             last_updated_ms: None,
             changes: vec![],
@@ -246,7 +246,7 @@ impl TableMetadataBuilder {
         // List of specified properties that are RESERVED and should not be persisted.
         let reserved_properties = properties
             .keys()
-            .filter(|key| RESERVED_PROPERTIES.contains(&key.as_str()))
+            .filter(|key| TableProperties::RESERVED_PROPERTIES.contains(&key.as_str()))
             .map(ToString::to_string)
             .collect::<Vec<_>>();
 
@@ -284,7 +284,7 @@ impl TableMetadataBuilder {
         // disallow removal of reserved properties
         let reserved_properties = properties
             .iter()
-            .filter(|key| RESERVED_PROPERTIES.contains(&key.as_str()))
+            .filter(|key| TableProperties::RESERVED_PROPERTIES.contains(&key.as_str()))
             .map(ToString::to_string)
             .collect::<Vec<_>>();
 
@@ -351,7 +351,7 @@ impl TableMetadataBuilder {
                     "Cannot add snapshot with sequence number {} older than last sequence number {}",
                     snapshot.sequence_number(),
                     self.metadata.last_sequence_number
-                )
+                ),
             ));
         }
 
@@ -588,7 +588,10 @@ impl TableMetadataBuilder {
     ///
     /// Important: Use this method with caution. The builder does not check
     /// if the added schema is compatible with the current schema.
-    pub fn add_schema(mut self, schema: Schema) -> Self {
+    pub fn add_schema(mut self, schema: Schema) -> Result<Self> {
+        // Validate that new schema fields don't conflict with existing partition field names
+        self.validate_schema_field_names(&schema)?;
+
         let new_schema_id = self.reuse_or_create_new_schema_id(&schema);
         let schema_found = self.metadata.schemas.contains_key(&new_schema_id);
 
@@ -600,7 +603,7 @@ impl TableMetadataBuilder {
                 self.last_added_schema_id = Some(new_schema_id);
             }
 
-            return self;
+            return Ok(self);
         }
 
         // New schemas might contain only old columns. In this case last_column_id should not be
@@ -622,7 +625,7 @@ impl TableMetadataBuilder {
 
         self.last_added_schema_id = Some(new_schema_id);
 
-        self
+        Ok(self)
     }
 
     /// Set the current schema id.
@@ -678,7 +681,97 @@ impl TableMetadataBuilder {
 
     /// Add a schema and set it as the current schema.
     pub fn add_current_schema(self, schema: Schema) -> Result<Self> {
-        self.add_schema(schema).set_current_schema(Self::LAST_ADDED)
+        self.add_schema(schema)?
+            .set_current_schema(Self::LAST_ADDED)
+    }
+
+    /// Validate schema field names against partition field names across all historical schemas.
+    ///
+    /// Due to Iceberg's multi-version property, this check ignores existing schema fields
+    /// that match partition names (schema evolution allows re-adding previously removed fields).
+    /// Only NEW field names that conflict with partition names are rejected.
+    ///
+    /// # Errors
+    /// - Schema field name conflicts with partition field name but doesn't exist in any historical schema.
+    fn validate_schema_field_names(&self, schema: &Schema) -> Result<()> {
+        if self.metadata.schemas.is_empty() {
+            return Ok(());
+        }
+
+        for field_name in schema.field_id_to_name_map().values() {
+            let has_partition_conflict = self.metadata.partition_name_exists(field_name);
+            let is_new_field = !self.metadata.name_exists_in_any_schema(field_name);
+
+            if has_partition_conflict && is_new_field {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Cannot add schema field '{}' because it conflicts with existing partition field name. \
+                         Schema evolution cannot introduce field names that match existing partition field names.",
+                        field_name
+                    ),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate partition field names against schema field names across all historical schemas.
+    ///
+    /// Due to Iceberg's multi-version property, partition fields can share names with schema fields
+    /// if they meet specific requirements (identity transform + matching source field ID).
+    /// This validation enforces those rules across all historical schema versions.
+    ///
+    /// # Errors
+    /// - Partition field name conflicts with schema field name but doesn't use identity transform.
+    /// - Partition field uses identity transform but references wrong source field ID.
+    fn validate_partition_field_names(&self, unbound_spec: &UnboundPartitionSpec) -> Result<()> {
+        if self.metadata.schemas.is_empty() {
+            return Ok(());
+        }
+
+        let current_schema = self.get_current_schema()?;
+        for partition_field in unbound_spec.fields() {
+            let exists_in_any_schema = self
+                .metadata
+                .name_exists_in_any_schema(&partition_field.name);
+
+            // Skip if partition field name doesn't conflict with any schema field
+            if !exists_in_any_schema {
+                continue;
+            }
+
+            // If name exists in schemas, validate against current schema rules
+            if let Some(schema_field) = current_schema.field_by_name(&partition_field.name) {
+                let is_identity_transform =
+                    partition_field.transform == crate::spec::Transform::Identity;
+                let has_matching_source_id = schema_field.id == partition_field.source_id;
+
+                if !is_identity_transform {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Cannot create partition with name '{}' that conflicts with schema field and is not an identity transform.",
+                            partition_field.name
+                        ),
+                    ));
+                }
+
+                if !has_matching_source_id {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Cannot create identity partition sourced from different field in schema. \
+                             Field name '{}' has id `{}` in schema but partition source id is `{}`",
+                            partition_field.name, schema_field.id, partition_field.source_id
+                        ),
+                    ));
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Add a partition spec to the table metadata.
@@ -693,6 +786,10 @@ impl TableMetadataBuilder {
     /// - The partition spec has non-sequential field ids and the table format version is 1.
     pub fn add_partition_spec(mut self, unbound_spec: UnboundPartitionSpec) -> Result<Self> {
         let schema = self.get_current_schema()?.clone();
+
+        // Check if partition field names conflict with schema field names across all schemas
+        self.validate_partition_field_names(&unbound_spec)?;
+
         let spec = PartitionSpecBuilder::new_from_unbound(unbound_spec.clone(), schema)?
             .with_last_assigned_field_id(self.metadata.last_partition_id)
             .build()?;
@@ -761,17 +858,19 @@ impl TableMetadataBuilder {
             ));
         }
 
-        let schemaless_spec =
-            self.metadata
-                .partition_specs
-                .get(&spec_id)
-                .ok_or_else(|| {
-                    Error::new(
-                ErrorKind::DataInvalid,
-                format!("Cannot set default partition spec to unknown spec with id: '{spec_id}'",),
-            )
-                })?
-                .clone();
+        let schemaless_spec = self
+            .metadata
+            .partition_specs
+            .get(&spec_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Cannot set default partition spec to unknown spec with id: '{spec_id}'",
+                    ),
+                )
+            })?
+            .clone();
         let spec = Arc::unwrap_or_clone(schemaless_spec);
         let spec_type = spec.partition_type(self.get_current_schema()?)?;
         self.metadata.default_spec = Arc::new(spec);
@@ -961,9 +1060,9 @@ impl TableMetadataBuilder {
         let max_size = self
             .metadata
             .properties
-            .get(PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX)
+            .get(TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX)
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT)
+            .unwrap_or(TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT)
             .max(1);
 
         if self.metadata.metadata_log.len() > max_size {
@@ -1256,14 +1355,14 @@ mod tests {
     use std::thread::sleep;
 
     use super::*;
+    use crate::TableIdent;
     use crate::io::FileIOBuilder;
     use crate::spec::{
         BlobMetadata, NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema,
-        SnapshotRetention, SortDirection, SortField, StructType, Summary, Transform, Type,
-        UnboundPartitionField,
+        SnapshotRetention, SortDirection, SortField, StructType, Summary, TableProperties,
+        Transform, Type, UnboundPartitionField,
     };
     use crate::table::Table;
-    use crate::TableIdent;
 
     const TEST_LOCATION: &str = "s3://bucket/test/location";
     const LAST_ASSIGNED_COLUMN_ID: i32 = 3;
@@ -1408,12 +1507,10 @@ mod tests {
                 NestedField::required(
                     13,
                     "struct",
-                    Type::Struct(StructType::new(vec![NestedField::required(
-                        14,
-                        "nested",
-                        Type::Primitive(PrimitiveType::Long),
-                    )
-                    .into()])),
+                    Type::Struct(StructType::new(vec![
+                        NestedField::required(14, "nested", Type::Primitive(PrimitiveType::Long))
+                            .into(),
+                    ])),
                 )
                 .into(),
                 NestedField::required(15, "c", Type::Primitive(PrimitiveType::Long)).into(),
@@ -1449,12 +1546,10 @@ mod tests {
                 NestedField::required(
                     3,
                     "struct",
-                    Type::Struct(StructType::new(vec![NestedField::required(
-                        5,
-                        "nested",
-                        Type::Primitive(PrimitiveType::Long),
-                    )
-                    .into()])),
+                    Type::Struct(StructType::new(vec![
+                        NestedField::required(5, "nested", Type::Primitive(PrimitiveType::Long))
+                            .into(),
+                    ])),
                 )
                 .into(),
                 NestedField::required(4, "c", Type::Primitive(PrimitiveType::Long)).into(),
@@ -1860,6 +1955,7 @@ mod tests {
 
         let build_result = builder
             .add_schema(added_schema.clone())
+            .unwrap()
             .set_current_schema(1)
             .unwrap()
             .build()
@@ -1966,19 +2062,21 @@ mod tests {
 
         let builder = builder.add_snapshot(snapshot.clone()).unwrap();
 
-        assert!(builder
-            .clone()
-            .set_ref(MAIN_BRANCH, SnapshotReference {
-                snapshot_id: 10,
-                retention: SnapshotRetention::Branch {
-                    min_snapshots_to_keep: Some(10),
-                    max_snapshot_age_ms: None,
-                    max_ref_age_ms: None,
-                },
-            })
-            .unwrap_err()
-            .to_string()
-            .contains("Cannot set 'main' to unknown snapshot: '10'"));
+        assert!(
+            builder
+                .clone()
+                .set_ref(MAIN_BRANCH, SnapshotReference {
+                    snapshot_id: 10,
+                    retention: SnapshotRetention::Branch {
+                        min_snapshots_to_keep: Some(10),
+                        max_snapshot_age_ms: None,
+                        max_ref_age_ms: None,
+                    },
+                })
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot set 'main' to unknown snapshot: '10'")
+        );
 
         let build_result = builder
             .set_ref(MAIN_BRANCH, SnapshotReference {
@@ -2160,9 +2258,10 @@ mod tests {
             .build()
             .unwrap_err();
 
-        assert!(err
-            .to_string()
-            .contains("Cannot find partition source field"));
+        assert!(
+            err.to_string()
+                .contains("Cannot find partition source field")
+        );
     }
 
     #[test]
@@ -2199,7 +2298,7 @@ mod tests {
         let builder = builder_without_changes(FormatVersion::V2);
         let metadata = builder
             .set_properties(HashMap::from_iter(vec![(
-                PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX.to_string(),
+                TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX.to_string(),
                 "2".to_string(),
             )]))
             .unwrap()
@@ -2281,9 +2380,10 @@ mod tests {
         let err = builder
             .set_branch_snapshot(snapshot, MAIN_BRANCH)
             .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Cannot add snapshot with sequence number"));
+        assert!(
+            err.to_string()
+                .contains("Cannot add snapshot with sequence number")
+        );
     }
 
     #[test]
@@ -2492,5 +2592,405 @@ mod tests {
                 unreachable!("Expected RemoveSchema change")
             };
         assert_eq!(remove_schema_ids, &[0]);
+    }
+
+    #[test]
+    fn test_schema_evolution_now_correctly_validates_partition_field_name_conflicts() {
+        let initial_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let partition_spec_with_bucket = UnboundPartitionSpec::builder()
+            .with_spec_id(0)
+            .add_partition_field(1, "bucket_data", Transform::Bucket(16))
+            .unwrap()
+            .build();
+
+        let metadata = TableMetadataBuilder::new(
+            initial_schema,
+            partition_spec_with_bucket,
+            SortOrder::unsorted_order(),
+            TEST_LOCATION.to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        let partition_field_names: Vec<String> = metadata
+            .default_partition_spec()
+            .fields()
+            .iter()
+            .map(|f| f.name.clone())
+            .collect();
+        assert!(partition_field_names.contains(&"bucket_data".to_string()));
+
+        let evolved_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                // Adding a schema field with the same name as an existing partition field
+                NestedField::required(2, "bucket_data", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let builder = metadata.into_builder(Some(
+            "s3://bucket/test/location/metadata/metadata1.json".to_string(),
+        ));
+
+        // Try to add the evolved schema - this should now fail immediately with a clear error
+        let result = builder.add_current_schema(evolved_schema);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let error_message = error.message();
+        assert!(error_message.contains("Cannot add schema field 'bucket_data' because it conflicts with existing partition field name"));
+        assert!(error_message.contains("Schema evolution cannot introduce field names that match existing partition field names"));
+    }
+
+    #[test]
+    fn test_schema_evolution_should_validate_on_schema_add_not_metadata_build() {
+        let initial_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let partition_spec = UnboundPartitionSpec::builder()
+            .with_spec_id(0)
+            .add_partition_field(1, "partition_col", Transform::Bucket(16))
+            .unwrap()
+            .build();
+
+        let metadata = TableMetadataBuilder::new(
+            initial_schema,
+            partition_spec,
+            SortOrder::unsorted_order(),
+            TEST_LOCATION.to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        let non_conflicting_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(2, "new_field", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        // This should succeed since there's no name conflict
+        let result = metadata
+            .clone()
+            .into_builder(Some("test_location".to_string()))
+            .add_current_schema(non_conflicting_schema)
+            .unwrap()
+            .build();
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_partition_spec_evolution_validates_schema_field_name_conflicts() {
+        let initial_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(2, "existing_field", Type::Primitive(PrimitiveType::Int))
+                    .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let partition_spec = UnboundPartitionSpec::builder()
+            .with_spec_id(0)
+            .add_partition_field(1, "data_bucket", Transform::Bucket(16))
+            .unwrap()
+            .build();
+
+        let metadata = TableMetadataBuilder::new(
+            initial_schema,
+            partition_spec,
+            SortOrder::unsorted_order(),
+            TEST_LOCATION.to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        let builder = metadata.into_builder(Some(
+            "s3://bucket/test/location/metadata/metadata1.json".to_string(),
+        ));
+
+        let conflicting_partition_spec = UnboundPartitionSpec::builder()
+            .with_spec_id(1)
+            .add_partition_field(1, "existing_field", Transform::Bucket(8))
+            .unwrap()
+            .build();
+
+        let result = builder.add_partition_spec(conflicting_partition_spec);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let error_message = error.message();
+        // The error comes from our multi-version validation
+        assert!(error_message.contains(
+            "Cannot create partition with name 'existing_field' that conflicts with schema field"
+        ));
+        assert!(error_message.contains("and is not an identity transform"));
+    }
+
+    #[test]
+    fn test_schema_evolution_validates_against_all_historical_schemas() {
+        // Create a table with an initial schema that has a field "existing_field"
+        let initial_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(2, "existing_field", Type::Primitive(PrimitiveType::Int))
+                    .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let partition_spec = UnboundPartitionSpec::builder()
+            .with_spec_id(0)
+            .add_partition_field(1, "bucket_data", Transform::Bucket(16))
+            .unwrap()
+            .build();
+
+        let metadata = TableMetadataBuilder::new(
+            initial_schema,
+            partition_spec,
+            SortOrder::unsorted_order(),
+            TEST_LOCATION.to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        // Add a second schema that removes the existing_field but keeps the data field
+        let second_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(3, "new_field", Type::Primitive(PrimitiveType::String))
+                    .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let metadata = metadata
+            .into_builder(Some("test_location".to_string()))
+            .add_current_schema(second_schema)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        // Now try to add a third schema that reintroduces "existing_field"
+        // This should succeed because "existing_field" exists in a historical schema,
+        // even though there's a partition field named "bucket_data"
+        let third_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(3, "new_field", Type::Primitive(PrimitiveType::String))
+                    .into(),
+                NestedField::required(4, "existing_field", Type::Primitive(PrimitiveType::Int))
+                    .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let builder = metadata
+            .clone()
+            .into_builder(Some("test_location".to_string()));
+
+        // This should succeed because "existing_field" exists in a historical schema
+        let result = builder.add_current_schema(third_schema);
+        assert!(result.is_ok());
+
+        // However, trying to add a schema field that conflicts with the partition field
+        // and doesn't exist in any historical schema should fail
+        let conflicting_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(3, "new_field", Type::Primitive(PrimitiveType::String))
+                    .into(),
+                NestedField::required(4, "existing_field", Type::Primitive(PrimitiveType::Int))
+                    .into(),
+                NestedField::required(5, "bucket_data", Type::Primitive(PrimitiveType::String))
+                    .into(), // conflicts with partition field
+            ])
+            .build()
+            .unwrap();
+
+        let builder2 = metadata.into_builder(Some("test_location".to_string()));
+        let result2 = builder2.add_current_schema(conflicting_schema);
+
+        // This should fail because "bucket_data" conflicts with partition field name
+        // and doesn't exist in any historical schema
+        assert!(result2.is_err());
+        let error = result2.unwrap_err();
+        assert!(error.message().contains("Cannot add schema field 'bucket_data' because it conflicts with existing partition field name"));
+    }
+
+    #[test]
+    fn test_schema_evolution_allows_existing_partition_field_if_exists_in_historical_schema() {
+        // Create initial schema with a field
+        let initial_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(2, "partition_data", Type::Primitive(PrimitiveType::Int))
+                    .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let partition_spec = UnboundPartitionSpec::builder()
+            .with_spec_id(0)
+            .add_partition_field(2, "partition_data", Transform::Identity)
+            .unwrap()
+            .build();
+
+        let metadata = TableMetadataBuilder::new(
+            initial_schema,
+            partition_spec,
+            SortOrder::unsorted_order(),
+            TEST_LOCATION.to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        // Add a new schema that still contains the partition_data field
+        let evolved_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(2, "partition_data", Type::Primitive(PrimitiveType::Int))
+                    .into(),
+                NestedField::required(3, "new_field", Type::Primitive(PrimitiveType::String))
+                    .into(),
+            ])
+            .build()
+            .unwrap();
+
+        // This should succeed because partition_data exists in historical schemas
+        let result = metadata
+            .into_builder(Some("test_location".to_string()))
+            .add_current_schema(evolved_schema);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_schema_evolution_prevents_new_field_conflicting_with_partition_field() {
+        // Create initial schema WITHOUT the conflicting field
+        let initial_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let partition_spec = UnboundPartitionSpec::builder()
+            .with_spec_id(0)
+            .add_partition_field(1, "bucket_data", Transform::Bucket(16))
+            .unwrap()
+            .build();
+
+        let metadata = TableMetadataBuilder::new(
+            initial_schema,
+            partition_spec,
+            SortOrder::unsorted_order(),
+            TEST_LOCATION.to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        // Try to add a schema with a field that conflicts with partition field name
+        let conflicting_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                // This field name conflicts with the partition field "bucket_data"
+                NestedField::required(2, "bucket_data", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let builder = metadata.into_builder(Some("test_location".to_string()));
+        let result = builder.add_current_schema(conflicting_schema);
+
+        // This should fail because "bucket_data" conflicts with partition field name
+        // and doesn't exist in any historical schema
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.message().contains("Cannot add schema field 'bucket_data' because it conflicts with existing partition field name"));
+    }
+
+    #[test]
+    fn test_partition_spec_evolution_allows_non_conflicting_names() {
+        let initial_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(2, "existing_field", Type::Primitive(PrimitiveType::Int))
+                    .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let partition_spec = UnboundPartitionSpec::builder()
+            .with_spec_id(0)
+            .add_partition_field(1, "data_bucket", Transform::Bucket(16))
+            .unwrap()
+            .build();
+
+        let metadata = TableMetadataBuilder::new(
+            initial_schema,
+            partition_spec,
+            SortOrder::unsorted_order(),
+            TEST_LOCATION.to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        let builder = metadata.into_builder(Some(
+            "s3://bucket/test/location/metadata/metadata1.json".to_string(),
+        ));
+
+        // Try to add a partition spec with a field name that does NOT conflict with existing schema fields
+        let non_conflicting_partition_spec = UnboundPartitionSpec::builder()
+            .with_spec_id(1)
+            .add_partition_field(2, "new_partition_field", Transform::Bucket(8))
+            .unwrap()
+            .build();
+
+        let result = builder.add_partition_spec(non_conflicting_partition_spec);
+
+        assert!(result.is_ok());
     }
 }
