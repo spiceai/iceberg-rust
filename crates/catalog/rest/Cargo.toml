@@ -32,9 +32,9 @@ repository = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 aws-config = { workspace = true, optional = true }
-aws-sigv4 = { workspace = true, optional = true }
 aws-credential-types = { workspace = true, optional = true }
 aws-sdk-sts = { workspace = true, optional = true }
+aws-sigv4 = { workspace = true, optional = true }
 chrono = { workspace = true }
 http = { workspace = true }
 iceberg = { workspace = true }
@@ -59,3 +59,6 @@ wiremock = "=0.6.4"
 [features]
 default = ["sigv4"]
 sigv4 = ["aws-config", "aws-sigv4", "aws-credential-types", "aws-sdk-sts"]
+
+[package.metadata.cargo-machete]
+ignored = ["aws-sdk-sts"]
