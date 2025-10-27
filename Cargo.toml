@@ -51,7 +51,7 @@ arrow-schema = { version = "56" }
 arrow-select = { version = "56" }
 arrow-string = { version = "56" }
 as-any = "0.3.2"
-async-trait = "0.1.88"
+async-trait = "0.1.89"
 aws-config = "1.8.1"
 aws-credential-types = "1.2"
 aws-sdk-glue = "1.39"

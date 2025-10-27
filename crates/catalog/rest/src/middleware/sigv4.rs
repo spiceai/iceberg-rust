@@ -106,7 +106,7 @@ impl Middleware for SigV4Middleware {
         let config = self
             .config
             .get_or_init(|| async {
-                let mut config_builder = aws_config::defaults(BehaviorVersion::v2025_01_17());
+                let mut config_builder = aws_config::defaults(BehaviorVersion::v2025_08_07());
 
                 let region = Region::new(signing_region);
                 config_builder = config_builder.region(region.clone());
