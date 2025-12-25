@@ -27,12 +27,9 @@ use itertools::Itertools;
 use parquet::arrow::AsyncArrowWriter;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::async_writer::AsyncFileWriter as ArrowAsyncFileWriter;
-use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
 use parquet::file::statistics::Statistics;
-use parquet::format::FileMetaData;
-use parquet::thrift::{TCompactOutputProtocol, TSerializable};
-use thrift::protocol::TOutputProtocol;
 
 use super::{FileWriter, FileWriterBuilder};
 use crate::arrow::{
@@ -81,11 +78,11 @@ impl ParquetWriterBuilder {
 impl FileWriterBuilder for ParquetWriterBuilder {
     type R = ParquetWriter;
 
-    async fn build(self, output_file: OutputFile) -> Result<Self::R> {
+    async fn build(&self, output_file: OutputFile) -> Result<Self::R> {
         Ok(ParquetWriter {
             schema: self.schema.clone(),
             inner_writer: None,
-            writer_properties: self.props,
+            writer_properties: self.props.clone(),
             current_row_num: 0,
             output_file,
             nan_value_count_visitor: NanValueCountVisitor::new_with_match_mode(self.match_mode),
@@ -274,10 +271,7 @@ impl MinMaxColAggregator {
         let Type::Primitive(ty) = ty.clone() else {
             return Err(Error::new(
                 ErrorKind::Unexpected,
-                format!(
-                    "Composed type {} is not supported for min max aggregation.",
-                    ty
-                ),
+                format!("Composed type {ty} is not supported for min max aggregation."),
             ));
         };
 
@@ -285,7 +279,7 @@ impl MinMaxColAggregator {
             let Some(min_datum) = get_parquet_stat_min_as_datum(&ty, &value)? else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
-                    format!("Statistics {} is not match with field type {}.", value, ty),
+                    format!("Statistics {value} is not match with field type {ty}."),
                 ));
             };
 
@@ -296,7 +290,7 @@ impl MinMaxColAggregator {
             let Some(max_datum) = get_parquet_stat_max_as_datum(&ty, &value)? else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
-                    format!("Statistics {} is not match with field type {}.", value, ty),
+                    format!("Statistics {value} is not match with field type {ty}."),
                 ));
             };
 
@@ -333,7 +327,7 @@ impl ParquetWriter {
             let parquet_metadata = parquet_reader.get_metadata(None).await.map_err(|err| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Error reading Parquet metadata: {}", err),
+                    format!("Error reading Parquet metadata: {err}"),
                 )
             })?;
             let mut builder = ParquetWriter::parquet_to_data_file_builder(
@@ -350,29 +344,6 @@ impl ParquetWriter {
         }
 
         Ok(data_files)
-    }
-
-    fn thrift_to_parquet_metadata(&self, file_metadata: FileMetaData) -> Result<ParquetMetaData> {
-        let mut buffer = Vec::new();
-        {
-            let mut protocol = TCompactOutputProtocol::new(&mut buffer);
-            file_metadata
-                .write_to_out_protocol(&mut protocol)
-                .map_err(|err| {
-                    Error::new(ErrorKind::Unexpected, "Failed to write parquet metadata")
-                        .with_source(err)
-                })?;
-
-            protocol.flush().map_err(|err| {
-                Error::new(ErrorKind::Unexpected, "Failed to flush protocol").with_source(err)
-            })?;
-        }
-
-        let parquet_metadata = ParquetMetaDataReader::decode_metadata(&buffer).map_err(|err| {
-            Error::new(ErrorKind::Unexpected, "Failed to decode parquet metadata").with_source(err)
-        })?;
-
-        Ok(parquet_metadata)
     }
 
     /// `ParquetMetadata` to data file builder
@@ -441,13 +412,13 @@ impl ParquetWriter {
             // - We can ignore implementing distinct_counts due to this: https://lists.apache.org/thread/j52tsojv0x4bopxyzsp7m7bqt23n5fnd
             .lower_bounds(lower_bounds)
             .upper_bounds(upper_bounds)
-            .split_offsets(
+            .split_offsets(Some(
                 metadata
                     .row_groups()
                     .iter()
                     .filter_map(|group| group.file_offset())
                     .collect(),
-            );
+            ));
 
         Ok(builder)
     }
@@ -567,14 +538,7 @@ impl FileWriter for ParquetWriter {
             })?;
             Ok(vec![])
         } else {
-            let parquet_metadata =
-                Arc::new(self.thrift_to_parquet_metadata(metadata).map_err(|err| {
-                    Error::new(
-                        ErrorKind::Unexpected,
-                        "Failed to convert metadata from thrift to parquet.",
-                    )
-                    .with_source(err)
-                })?);
+            let parquet_metadata = Arc::new(metadata);
 
             Ok(vec![Self::parquet_to_data_file_builder(
                 self.schema,

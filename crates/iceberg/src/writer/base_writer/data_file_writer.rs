@@ -27,7 +27,7 @@ use crate::writer::{CurrentFileStatus, IcebergWriter, IcebergWriterBuilder};
 use crate::{Error, ErrorKind, Result};
 
 /// Builder for `DataFileWriter`.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct DataFileWriterBuilder<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> {
     inner: RollingFileWriterBuilder<B, L, F>,
 }
@@ -53,9 +53,9 @@ where
 {
     type R = DataFileWriter<B, L, F>;
 
-    async fn build(self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
+    async fn build(&self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
         Ok(DataFileWriter {
-            inner: Some(self.inner.clone().build()),
+            inner: Some(self.inner.build()),
             partition_key,
         })
     }
@@ -101,7 +101,7 @@ where
                     res.build().map_err(|e| {
                         Error::new(
                             ErrorKind::DataInvalid,
-                            format!("Failed to build data file: {}", e),
+                            format!("Failed to build data file: {e}"),
                         )
                     })
                 })
