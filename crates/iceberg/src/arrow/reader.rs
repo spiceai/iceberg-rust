@@ -2411,6 +2411,7 @@ message schema {
             partition_spec: None,
             name_mapping: None,
             case_sensitive: false,
+            limit: None,
         };
 
         // Task 2: read the second and third row groups
@@ -2428,6 +2429,7 @@ message schema {
             partition_spec: None,
             name_mapping: None,
             case_sensitive: false,
+            limit: None,
         };
 
         let tasks1 = Box::pin(futures::stream::iter(vec![Ok(task1)])) as FileScanTaskStream;
@@ -2556,6 +2558,7 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+                limit: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -2728,6 +2731,7 @@ message schema {
             partition_spec: None,
             name_mapping: None,
             case_sensitive: false,
+            limit: None,
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -2946,6 +2950,7 @@ message schema {
             partition_spec: None,
             name_mapping: None,
             case_sensitive: false,
+            limit: None,
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -3157,6 +3162,7 @@ message schema {
             partition_spec: None,
             name_mapping: None,
             case_sensitive: false,
+            limit: None,
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -3261,6 +3267,7 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+                limit: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3359,6 +3366,7 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+                limit: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3446,6 +3454,7 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+                limit: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3547,6 +3556,7 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+                limit: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3677,6 +3687,7 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+                limit: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3774,6 +3785,7 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+                limit: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3884,6 +3896,7 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+                limit: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -4024,6 +4037,7 @@ message schema {
                 partition_spec: Some(partition_spec),
                 name_mapping: None,
                 case_sensitive: false,
+                limit: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
