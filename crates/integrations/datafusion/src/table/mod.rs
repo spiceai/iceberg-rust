@@ -372,10 +372,7 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             metadata_file_name
         );
-        let file_io = FileIO::from_path(&metadata_file_path)
-            .unwrap()
-            .build()
-            .unwrap();
+        let file_io = FileIO::new_with_fs();
         let static_identifier = TableIdent::from_strs(["static_ns", "static_table"]).unwrap();
         let static_table =
             StaticTable::from_metadata_file(&metadata_file_path, static_identifier, file_io)
@@ -774,6 +771,98 @@ mod tests {
         assert!(
             plan_contains_sort(&insert_plan),
             "Plan should contain SortExec when fanout is disabled"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_limit_pushdown_static_provider() {
+        use datafusion::datasource::TableProvider;
+
+        let table = get_test_table_from_metadata_file().await;
+        let table_provider = IcebergStaticTableProvider::try_new_from_table(table.clone())
+            .await
+            .unwrap();
+
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+
+        // Test scan with limit
+        let scan_plan = table_provider
+            .scan(&state, None, &[], Some(10))
+            .await
+            .unwrap();
+
+        // Verify that the scan plan is an IcebergTableScan
+        let iceberg_scan = scan_plan
+            .as_any()
+            .downcast_ref::<IcebergTableScan>()
+            .expect("Expected IcebergTableScan");
+
+        // Verify the limit is set
+        assert_eq!(
+            iceberg_scan.limit(),
+            Some(10),
+            "Limit should be set to 10 in the scan plan"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_limit_pushdown_catalog_backed_provider() {
+        use datafusion::datasource::TableProvider;
+
+        let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
+
+        let provider =
+            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
+                .await
+                .unwrap();
+
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+
+        // Test scan with limit
+        let scan_plan = provider.scan(&state, None, &[], Some(5)).await.unwrap();
+
+        // Verify that the scan plan is an IcebergTableScan
+        let iceberg_scan = scan_plan
+            .as_any()
+            .downcast_ref::<IcebergTableScan>()
+            .expect("Expected IcebergTableScan");
+
+        // Verify the limit is set
+        assert_eq!(
+            iceberg_scan.limit(),
+            Some(5),
+            "Limit should be set to 5 in the scan plan"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_no_limit_pushdown() {
+        use datafusion::datasource::TableProvider;
+
+        let table = get_test_table_from_metadata_file().await;
+        let table_provider = IcebergStaticTableProvider::try_new_from_table(table.clone())
+            .await
+            .unwrap();
+
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+
+        // Test scan without limit
+        let scan_plan = table_provider.scan(&state, None, &[], None).await.unwrap();
+
+        // Verify that the scan plan is an IcebergTableScan
+        let iceberg_scan = scan_plan
+            .as_any()
+            .downcast_ref::<IcebergTableScan>()
+            .expect("Expected IcebergTableScan");
+
+        // Verify the limit is None
+        assert_eq!(
+            iceberg_scan.limit(),
+            None,
+            "Limit should be None when not specified"
         );
     }
 }

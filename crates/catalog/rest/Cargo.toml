@@ -50,10 +50,8 @@ typed-builder = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
-ctor = { workspace = true }
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 mockito = { workspace = true }
-port_scanner = { workspace = true }
 tokio = { workspace = true }
 wiremock = "=0.6.4"
 [features]
