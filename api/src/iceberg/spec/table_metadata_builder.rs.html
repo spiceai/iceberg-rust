@@ -570,7 +570,7 @@
 <a href=#570 id=570 data-nosnippet>570</a>
 <a href=#571 id=571 data-nosnippet>571</a>    <span class="doccomment">/// Remove a reference
 <a href=#572 id=572 data-nosnippet>572</a>    ///
-<a href=#573 id=573 data-nosnippet>573</a>    /// If `ref_name='main'` the current snapshot id is set to -1.
+<a href=#573 id=573 data-nosnippet>573</a>    /// If `ref_name='main'` the current snapshot id is set to `None`.
 <a href=#574 id=574 data-nosnippet>574</a>    </span><span class="kw">pub fn </span>remove_ref(<span class="kw-2">mut </span><span class="self">self</span>, ref_name: <span class="kw-2">&amp;</span>str) -&gt; <span class="self">Self </span>{
 <a href=#575 id=575 data-nosnippet>575</a>        <span class="kw">if </span>ref_name == MAIN_BRANCH {
 <a href=#576 id=576 data-nosnippet>576</a>            <span class="self">self</span>.metadata.current_snapshot_id = <span class="prelude-val">None</span>;
@@ -2709,7 +2709,7 @@
 <a href=#2709 id=2709 data-nosnippet>2709</a>
 <a href=#2710 id=2710 data-nosnippet>2710</a>        <span class="kw">let </span>table = Table::builder()
 <a href=#2711 id=2711 data-nosnippet>2711</a>            .metadata(resp)
-<a href=#2712 id=2712 data-nosnippet>2712</a>            .metadata_location(<span class="string">"s3://bucket/test/location/metadata/v1.json"</span>.to_string())
+<a href=#2712 id=2712 data-nosnippet>2712</a>            .metadata_location(<span class="string">"s3://bucket/test/location/metadata/v1.json"</span>)
 <a href=#2713 id=2713 data-nosnippet>2713</a>            .identifier(TableIdent::from_strs([<span class="string">"ns1"</span>, <span class="string">"test1"</span>]).unwrap())
 <a href=#2714 id=2714 data-nosnippet>2714</a>            .file_io(FileIO::new_with_memory())
 <a href=#2715 id=2715 data-nosnippet>2715</a>            .build()
@@ -2740,7 +2740,7 @@
 <a href=#2740 id=2740 data-nosnippet>2740</a>
 <a href=#2741 id=2741 data-nosnippet>2741</a>        <span class="kw">let </span>table = Table::builder()
 <a href=#2742 id=2742 data-nosnippet>2742</a>            .metadata(resp)
-<a href=#2743 id=2743 data-nosnippet>2743</a>            .metadata_location(<span class="string">"s3://bucket/test/location/metadata/v1.json"</span>.to_string())
+<a href=#2743 id=2743 data-nosnippet>2743</a>            .metadata_location(<span class="string">"s3://bucket/test/location/metadata/v1.json"</span>)
 <a href=#2744 id=2744 data-nosnippet>2744</a>            .identifier(TableIdent::from_strs([<span class="string">"ns1"</span>, <span class="string">"test1"</span>]).unwrap())
 <a href=#2745 id=2745 data-nosnippet>2745</a>            .file_io(FileIO::new_with_memory())
 <a href=#2746 id=2746 data-nosnippet>2746</a>            .build()
