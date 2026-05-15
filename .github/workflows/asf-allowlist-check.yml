@@ -1,3 +1,4 @@
+#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -14,35 +15,32 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+#
 
-version: 2
-updates:
-  # Maintain dependencies for GitHub Actions
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "sunday"
-    cooldown:
-      default-days: 7
+# Verifies all GitHub Actions refs are on the ASF allowlist.
+# Actions not on the allowlist silently fail with "Startup failure" — no logs,
+# no notifications, and PRs may appear green because no checks ran.
+# See https://github.com/apache/infrastructure-actions/issues/574
+name: "ASF Allowlist Check"
 
-  # Maintain dependencies for iceberg
-  - package-ecosystem: "cargo"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "sunday"
-    open-pull-requests-limit: 50
-    versioning-strategy: lockfile-only
-    ignore:
-       # For all packages, ignore all patch updates
-      - dependency-name: "*"
-        update-types: ["version-update:semver-patch"]
-    groups:
-      arrow-parquet:
-        applies-to: version-updates
-        patterns:
-          - "arrow*"
-          - "parquet"
-    cooldown:
-      default-days: 7
+on:
+  pull_request:
+    paths:
+      - ".github/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/**"
+
+permissions:
+  contents: read
+
+jobs:
+  asf-allowlist-check:
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      with:
+        persist-credentials: false
+    - uses: apache/infrastructure-actions/allowlist-check@4e9c961f587f72b170874b6f5cd4ac15f7f26eb8  # main
