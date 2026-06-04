@@ -66,6 +66,7 @@ ordered-float = { workspace = true }
 parquet = { workspace = true, features = ["async", "encryption"] }
 rand = { workspace = true }
 reqwest = { workspace = true }
+reqwest-middleware = { workspace = true }
 roaring = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
