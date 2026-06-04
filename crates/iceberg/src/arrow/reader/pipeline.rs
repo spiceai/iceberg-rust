@@ -104,8 +104,9 @@ struct FileScanTaskReader {
 
 impl FileScanTaskReader {
     async fn process(self, task: FileScanTask) -> Result<ArrowRecordBatchStream> {
-        let should_load_page_index =
-            (self.row_selection_enabled && task.predicate.is_some()) || !task.deletes.is_empty();
+        let should_load_page_index = (self.row_selection_enabled && task.predicate.is_some())
+            || !task.deletes.is_empty()
+            || task.limit.is_some();
         let mut parquet_read_options = self.parquet_read_options;
         parquet_read_options.preload_page_index = should_load_page_index;
 
@@ -380,6 +381,10 @@ impl FileScanTaskReader {
                 record_batch_stream_builder.with_row_groups(selected_row_group_indices);
         }
 
+        if let Some(limit) = task.limit {
+            record_batch_stream_builder = record_batch_stream_builder.with_limit(limit);
+        }
+
         // Build the batch stream and send all the RecordBatches that it generates
         // to the requester.
         let record_batch_stream =
@@ -502,6 +507,7 @@ mod tests {
             project_field_ids,
             predicate: None,
             deletes: vec![],
+            limit: None,
             partition: None,
             partition_spec: None,
             name_mapping: None,
@@ -718,6 +724,7 @@ mod tests {
                 project_field_ids: vec![1, 2],
                 predicate: None,
                 deletes: vec![],
+                limit: None,
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
@@ -736,6 +743,7 @@ mod tests {
                 project_field_ids: vec![1, 2],
                 predicate: None,
                 deletes: vec![],
+                limit: None,
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
@@ -754,6 +762,7 @@ mod tests {
                 project_field_ids: vec![1, 2],
                 predicate: None,
                 deletes: vec![],
+                limit: None,
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,

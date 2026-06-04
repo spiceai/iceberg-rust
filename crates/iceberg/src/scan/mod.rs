@@ -61,6 +61,8 @@ pub struct TableScanBuilder<'a> {
     concurrency_limit_manifest_files: usize,
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+
+    limit: Option<usize>,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -79,7 +81,14 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: num_cpus,
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
+            limit: None,
         }
+    }
+
+    /// Sets the maximum number of records to return
+    pub fn with_limit(mut self, limit: Option<usize>) -> Self {
+        self.limit = limit;
+        self
     }
 
     /// Sets the desired size of batches in the response
@@ -287,6 +296,7 @@ impl<'a> TableScanBuilder<'a> {
             snapshot_schema: schema,
             case_sensitive: self.case_sensitive,
             predicate: self.filter.map(Arc::new),
+            limit: self.limit,
             snapshot_bound_predicate: snapshot_bound_predicate.map(Arc::new),
             object_cache: self.table.object_cache(),
             field_ids: Arc::new(field_ids),
@@ -1865,6 +1875,7 @@ pub mod tests {
             record_count: Some(100),
             data_file_format: DataFileFormat::Parquet,
             deletes: vec![],
+            limit: None,
             partition: None,
             partition_spec: None,
             name_mapping: None,
@@ -1884,6 +1895,7 @@ pub mod tests {
             record_count: None,
             data_file_format: DataFileFormat::Avro,
             deletes: vec![],
+            limit: None,
             partition: None,
             partition_spec: None,
             name_mapping: None,
