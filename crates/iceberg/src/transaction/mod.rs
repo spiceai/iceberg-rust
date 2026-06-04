@@ -54,6 +54,7 @@ mod action;
 
 pub use action::*;
 mod append;
+mod row_delta;
 mod snapshot;
 mod sort_order;
 mod update_location;
@@ -73,6 +74,7 @@ use crate::spec::TableProperties;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
+use crate::transaction::row_delta::RowDeltaAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
 use crate::transaction::update_properties::UpdatePropertiesAction;
@@ -147,6 +149,11 @@ impl Transaction {
     /// Creates a fast append action.
     pub fn fast_append(&self) -> FastAppendAction {
         FastAppendAction::new()
+    }
+
+    /// Creates a row delta action for adding both data files and delete files.
+    pub fn row_delta(&self) -> RowDeltaAction {
+        RowDeltaAction::new()
     }
 
     /// Creates replace sort order action.
