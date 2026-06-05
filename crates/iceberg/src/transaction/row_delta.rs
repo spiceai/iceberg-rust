@@ -219,10 +219,7 @@ mod tests {
             .unwrap()
     }
 
-    fn make_equality_delete_file(
-        table: &crate::table::Table,
-        path: &str,
-    ) -> crate::spec::DataFile {
+    fn make_equality_delete_file(table: &crate::table::Table, path: &str) -> crate::spec::DataFile {
         DataFileBuilder::default()
             .content(DataContentType::EqualityDeletes)
             .file_path(path.to_string())
@@ -236,10 +233,7 @@ mod tests {
             .unwrap()
     }
 
-    fn make_position_delete_file(
-        table: &crate::table::Table,
-        path: &str,
-    ) -> crate::spec::DataFile {
+    fn make_position_delete_file(table: &crate::table::Table, path: &str) -> crate::spec::DataFile {
         DataFileBuilder::default()
             .content(DataContentType::PositionDeletes)
             .file_path(path.to_string())
@@ -273,11 +267,9 @@ mod tests {
         let requirements = action_commit.take_requirements();
 
         // Check updates structure
-        assert!(
-            matches!((&updates[0], &updates[1]),
+        assert!(matches!((&updates[0], &updates[1]),
                 (TableUpdate::AddSnapshot { snapshot }, TableUpdate::SetSnapshotRef { reference, ref_name })
-                if snapshot.snapshot_id() == reference.snapshot_id && ref_name == MAIN_BRANCH)
-        );
+                if snapshot.snapshot_id() == reference.snapshot_id && ref_name == MAIN_BRANCH));
 
         // Check operation is Delete when only delete files present
         let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
@@ -453,9 +445,7 @@ mod tests {
             Err(e) => e.to_string(),
             Ok(_) => panic!("Expected error for V1 delete files"),
         };
-        assert!(
-            err_msg.contains("not supported in format version 1")
-        );
+        assert!(err_msg.contains("not supported in format version 1"));
     }
 
     #[tokio::test]
