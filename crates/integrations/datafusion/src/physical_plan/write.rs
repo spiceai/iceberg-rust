@@ -45,7 +45,7 @@ use iceberg::writer::file_writer::location_generator::{
 };
 use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::{Error, ErrorKind};
-use parquet::file::properties::WriterProperties;
+use parquet::file::properties::{CdcOptions, WriterPropertiesBuilder};
 use uuid::Uuid;
 
 use crate::physical_plan::DATA_FILES_COL_NAME;
@@ -64,7 +64,7 @@ pub(crate) struct IcebergWriteExec {
     table: Table,
     input: Arc<dyn ExecutionPlan>,
     result_schema: ArrowSchemaRef,
-    plan_properties: PlanProperties,
+    plan_properties: Arc<PlanProperties>,
 }
 
 impl IcebergWriteExec {
@@ -82,13 +82,13 @@ impl IcebergWriteExec {
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         schema: ArrowSchemaRef,
-    ) -> PlanProperties {
-        PlanProperties::new(
+    ) -> Arc<PlanProperties> {
+        Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(input.output_partitioning().partition_count()),
             EmissionType::Final,
             Boundedness::Bounded,
-        )
+        ))
     }
 
     // Create a record batch with serialized data files
@@ -153,7 +153,7 @@ impl ExecutionPlan for IcebergWriteExec {
         vec![true; self.children().len()]
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.plan_properties
     }
 
@@ -226,8 +226,17 @@ impl ExecutionPlan for IcebergWriteExec {
         }
 
         // Create data file writer builder
+        let cdc_options = table_props.cdc_enabled.then_some(CdcOptions {
+            min_chunk_size: table_props.cdc_min_chunk_size,
+            max_chunk_size: table_props.cdc_max_chunk_size,
+            norm_level: table_props.cdc_norm_level,
+        });
+        let writer_properties = WriterPropertiesBuilder::default()
+            .set_content_defined_chunking(cdc_options)
+            .build();
+
         let parquet_file_writer_builder = ParquetWriterBuilder::new_with_match_mode(
-            WriterProperties::default(),
+            writer_properties,
             self.table.metadata().current_schema().clone(),
             FieldMatchMode::Name,
         );
@@ -336,17 +345,17 @@ mod tests {
     struct MockExecutionPlan {
         schema: ArrowSchemaRef,
         batches: Vec<RecordBatch>,
-        properties: PlanProperties,
+        properties: Arc<PlanProperties>,
     }
 
     impl MockExecutionPlan {
         fn new(schema: ArrowSchemaRef, batches: Vec<RecordBatch>) -> Self {
-            let properties = PlanProperties::new(
+            let properties = Arc::new(PlanProperties::new(
                 EquivalenceProperties::new(schema.clone()),
                 Partitioning::UnknownPartitioning(1),
                 EmissionType::Final,
                 Boundedness::Bounded,
-            );
+            ));
 
             Self {
                 schema,
@@ -383,7 +392,7 @@ mod tests {
             self
         }
 
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             &self.properties
         }
 

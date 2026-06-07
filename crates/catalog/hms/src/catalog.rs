@@ -31,7 +31,7 @@ use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
-    TableCommit, TableCreation, TableIdent,
+    Runtime, TableCommit, TableCreation, TableIdent,
 };
 use volo_thrift::MaybeException;
 
@@ -56,6 +56,7 @@ pub const HMS_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 pub struct HmsCatalogBuilder {
     config: HmsCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
+    runtime: Option<Runtime>,
 }
 
 impl Default for HmsCatalogBuilder {
@@ -69,6 +70,7 @@ impl Default for HmsCatalogBuilder {
                 props: HashMap::new(),
             },
             storage_factory: None,
+            runtime: None,
         }
     }
 }
@@ -78,6 +80,11 @@ impl CatalogBuilder for HmsCatalogBuilder {
 
     fn with_storage_factory(mut self, storage_factory: Arc<dyn StorageFactory>) -> Self {
         self.storage_factory = Some(storage_factory);
+        self
+    }
+
+    fn with_runtime(mut self, runtime: Runtime) -> Self {
+        self.runtime = Some(runtime);
         self
     }
 
@@ -116,26 +123,31 @@ impl CatalogBuilder for HmsCatalogBuilder {
             })
             .collect();
 
-        let result = {
+        let result = (|| -> Result<HmsCatalog> {
             if self.config.name.is_none() {
-                Err(Error::new(
+                return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog name is required",
-                ))
-            } else if self.config.address.is_empty() {
-                Err(Error::new(
+                ));
+            }
+            if self.config.address.is_empty() {
+                return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog address is required",
-                ))
-            } else if self.config.warehouse.is_empty() {
-                Err(Error::new(
+                ));
+            }
+            if self.config.warehouse.is_empty() {
+                return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog warehouse is required",
-                ))
-            } else {
-                HmsCatalog::new(self.config, self.storage_factory)
+                ));
             }
-        };
+            let runtime = match self.runtime {
+                Some(rt) => rt,
+                None => Runtime::try_current()?,
+            };
+            HmsCatalog::new(self.config, self.storage_factory, runtime)
+        })();
 
         std::future::ready(result)
     }
@@ -169,6 +181,7 @@ pub struct HmsCatalog {
     config: HmsCatalogConfig,
     client: HmsClient,
     file_io: FileIO,
+    runtime: Runtime,
 }
 
 impl Debug for HmsCatalog {
@@ -184,6 +197,7 @@ impl HmsCatalog {
     fn new(
         config: HmsCatalogConfig,
         storage_factory: Option<Arc<dyn StorageFactory>>,
+        runtime: Runtime,
     ) -> Result<Self> {
         let address = config
             .address
@@ -223,6 +237,7 @@ impl HmsCatalog {
             config,
             client: HmsClient(client),
             file_io,
+            runtime,
         })
     }
     /// Get the catalogs `FileIO`
@@ -279,6 +294,12 @@ impl Catalog for HmsCatalog {
         namespace: &NamespaceIdent,
         properties: HashMap<String, String>,
     ) -> Result<Namespace> {
+        if self.namespace_exists(namespace).await? {
+            return Err(Error::new(
+                ErrorKind::NamespaceAlreadyExists,
+                format!("Namespace {namespace:?} already exists"),
+            ));
+        }
         let database = convert_to_database(namespace, &properties)?;
 
         self.client
@@ -303,13 +324,29 @@ impl Catalog for HmsCatalog {
     async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace> {
         let name = validate_namespace(namespace)?;
 
-        let db = self
+        let resp = self
             .client
             .0
             .get_database(name.into())
             .await
-            .map(from_thrift_exception)
-            .map_err(from_thrift_error)??;
+            .map_err(from_thrift_error)?;
+
+        let db = match resp {
+            MaybeException::Ok(db) => db,
+            MaybeException::Exception(ThriftHiveMetastoreGetDatabaseException::O1(_)) => {
+                return Err(Error::new(
+                    ErrorKind::NamespaceNotFound,
+                    format!("Namespace {namespace:?} not found"),
+                ));
+            }
+            MaybeException::Exception(exception) => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Operation failed for hitting thrift error".to_string(),
+                )
+                .with_source(anyhow!("thrift error: {exception:?}")));
+            }
+        };
 
         let ns = convert_to_namespace(&db)?;
 
@@ -362,6 +399,12 @@ impl Catalog for HmsCatalog {
         namespace: &NamespaceIdent,
         properties: HashMap<String, String>,
     ) -> Result<()> {
+        if !self.namespace_exists(namespace).await? {
+            return Err(Error::new(
+                ErrorKind::NamespaceNotFound,
+                format!("Namespace {namespace:?} does not exist"),
+            ));
+        }
         let db = convert_to_database(namespace, &properties)?;
 
         let name = match &db.name {
@@ -393,6 +436,13 @@ impl Catalog for HmsCatalog {
     async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
         let name = validate_namespace(namespace)?;
 
+        if !self.namespace_exists(namespace).await? {
+            return Err(Error::new(
+                ErrorKind::NamespaceNotFound,
+                format!("Namespace {namespace:?} does not exist"),
+            ));
+        }
+
         self.client
             .0
             .drop_database(name.into(), false, false)
@@ -413,6 +463,12 @@ impl Catalog for HmsCatalog {
     /// querying the database.
     async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
         let name = validate_namespace(namespace)?;
+        if !self.namespace_exists(namespace).await? {
+            return Err(Error::new(
+                ErrorKind::NamespaceNotFound,
+                format!("Namespace {namespace:?} does not exist"),
+            ));
+        }
 
         let tables = self
             .client
@@ -463,17 +519,17 @@ impl Catalog for HmsCatalog {
             .build()?
             .metadata;
 
-        let metadata_location =
-            MetadataLocation::new_with_table_location(location.clone()).to_string();
+        let metadata_location = MetadataLocation::new_with_metadata(location.clone(), &metadata);
 
         metadata.write_to(&self.file_io, &metadata_location).await?;
 
+        let metadata_location_str = metadata_location.to_string();
         let hive_table = convert_to_hive_table(
             db_name.clone(),
             metadata.current_schema(),
             table_name.clone(),
             location,
-            metadata_location.clone(),
+            metadata_location_str.clone(),
             metadata.properties(),
         )?;
 
@@ -485,9 +541,10 @@ impl Catalog for HmsCatalog {
 
         Table::builder()
             .file_io(self.file_io())
-            .metadata_location(metadata_location)
+            .metadata_location(metadata_location_str)
             .metadata(metadata)
             .identifier(TableIdent::new(NamespaceIdent::new(db_name), table_name))
+            .runtime(self.runtime.clone())
             .build()
     }
 
@@ -526,6 +583,7 @@ impl Catalog for HmsCatalog {
                 NamespaceIdent::new(db_name),
                 table.name.clone(),
             ))
+            .runtime(self.runtime.clone())
             .build()
     }
 
@@ -541,6 +599,18 @@ impl Catalog for HmsCatalog {
     /// - Any network or communication error occurs with the database backend.
     async fn drop_table(&self, table: &TableIdent) -> Result<()> {
         let db_name = validate_namespace(table.namespace())?;
+        if !self.namespace_exists(table.namespace()).await? {
+            return Err(Error::new(
+                ErrorKind::NamespaceNotFound,
+                format!("Namespace {:?} does not exist", table.namespace()),
+            ));
+        }
+        if !self.table_exists(table).await? {
+            return Err(Error::new(
+                ErrorKind::TableNotFound,
+                format!("Table {table:?} does not exist"),
+            ));
+        }
 
         self.client
             .0
@@ -549,6 +619,17 @@ impl Catalog for HmsCatalog {
             .map_err(from_thrift_error)?;
 
         Ok(())
+    }
+
+    async fn purge_table(&self, table: &TableIdent) -> Result<()> {
+        let table_info = self.load_table(table).await?;
+        self.drop_table(table).await?;
+        iceberg::drop_table_data(
+            table_info.file_io(),
+            table_info.metadata(),
+            table_info.metadata_location(),
+        )
+        .await
     }
 
     /// Asynchronously checks the existence of a specified table
@@ -589,6 +670,12 @@ impl Catalog for HmsCatalog {
     async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()> {
         let src_dbname = validate_namespace(src.namespace())?;
         let dest_dbname = validate_namespace(dest.namespace())?;
+        if self.table_exists(dest).await? {
+            return Err(Error::new(
+                ErrorKind::TableAlreadyExists,
+                format!("Destination table {dest:?} already exists"),
+            ));
+        }
 
         let src_tbl_name = src.name.clone();
         let dest_tbl_name = dest.name.clone();

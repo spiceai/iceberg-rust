@@ -82,6 +82,8 @@ pub struct FileScanTask {
     pub deletes: Vec<FileScanTaskDeleteFile>,
 
     /// Maximum number of records to return, None means no limit
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
 
     /// Partition data from the manifest entry, used to identify which columns can use

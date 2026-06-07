@@ -91,7 +91,6 @@ impl HttpClient {
 
         Ok(HttpClient {
             client: client_builder.build(),
-
             token: Mutex::new(cfg.token()),
             token_endpoint: cfg.get_token_endpoint(),
             credential: cfg.credential(),
@@ -113,6 +112,7 @@ impl HttpClient {
 
         let client = match cfg.client() {
             Some(client) => {
+                #[allow(unused_mut)]
                 let mut client_builder = ClientBuilder::new(client);
                 #[cfg(feature = "sigv4")]
                 if cfg.sigv4_enabled() {
@@ -125,7 +125,7 @@ impl HttpClient {
                 }
                 client_builder.build()
             }
-            None => ClientBuilder::from_client(self.client).build(),
+            None => self.client,
         };
 
         Ok(HttpClient {

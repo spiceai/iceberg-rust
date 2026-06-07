@@ -324,7 +324,11 @@ impl FileMetadata {
                 return FileMetadata::read(input_file).await;
             }
 
-            // Read footer based on prefetchi hint
+            // Validate file header magic
+            let first_four_bytes = file_read.read(0..FileMetadata::MAGIC_LENGTH.into()).await?;
+            FileMetadata::check_magic(&first_four_bytes)?;
+
+            // Read footer based on prefetch hint
             let start = input_file_length - prefetch_hint as u64;
             let end = input_file_length;
             let footer_bytes = file_read.read(start..end).await?;
@@ -388,6 +392,7 @@ mod tests {
     use bytes::Bytes;
     use tempfile::TempDir;
 
+    use crate::ErrorKind;
     use crate::io::{FileIO, InputFile};
     use crate::puffin::metadata::{BlobMetadata, CompressionCodec, FileMetadata};
     use crate::puffin::test_utils::{
@@ -959,6 +964,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_read_with_incorrect_header_magic() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let prefetch_hint: u8 = 64;
+        let mut bytes = vec![];
+        // Invalid header magic
+        bytes.extend([0x00, 0x00, 0x00, 0x00]);
+        // Intentionally keep file size larger than prefetch_hint.
+        bytes.extend(vec![0u8; prefetch_hint as usize]);
+        // Valid footer: magic + payload + footer struct
+        bytes.extend(FileMetadata::MAGIC);
+        bytes.extend(empty_footer_payload_bytes());
+        bytes.extend(empty_footer_payload_bytes_length_bytes());
+        bytes.extend(vec![0, 0, 0, 0]); // flags
+        bytes.extend(FileMetadata::MAGIC);
+
+        let input_file = input_file_with_bytes(&temp_dir, &bytes).await;
+
+        assert_eq!(
+            FileMetadata::read(&input_file).await.unwrap_err().kind(),
+            ErrorKind::DataInvalid,
+        );
+        assert_eq!(
+            FileMetadata::read_with_prefetch(&input_file, prefetch_hint)
+                .await
+                .unwrap_err()
+                .kind(),
+            ErrorKind::DataInvalid,
+        );
+    }
+
+    #[tokio::test]
     async fn test_gzip_compression_allowed_in_metadata() {
         let temp_dir = TempDir::new().unwrap();
 
@@ -985,6 +1022,9 @@ mod tests {
         assert!(result.is_ok());
         let metadata = result.unwrap();
         assert_eq!(metadata.blobs.len(), 1);
-        assert_eq!(metadata.blobs[0].compression_codec, CompressionCodec::Gzip);
+        assert_eq!(
+            metadata.blobs[0].compression_codec,
+            CompressionCodec::gzip_default()
+        );
     }
 }
