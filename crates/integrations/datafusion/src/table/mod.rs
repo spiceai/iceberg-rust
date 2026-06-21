@@ -78,6 +78,11 @@ pub struct IcebergTableProvider {
     table_ident: TableIdent,
     /// A reference-counted arrow `Schema` (cached at construction)
     schema: ArrowSchemaRef,
+    /// Optional snapshot to read. `None` (the default) reads the table's current
+    /// snapshot, refreshed from the catalog on each `scan`. `Some` pins reads to a
+    /// specific snapshot — e.g. so a distributed engine can plan every task of one
+    /// query against the same snapshot for a consistent result.
+    snapshot_id: Option<i64>,
 }
 
 impl IcebergTableProvider {
@@ -100,7 +105,24 @@ impl IcebergTableProvider {
             catalog,
             table_ident,
             schema,
+            snapshot_id: None,
         })
+    }
+
+    /// Pins reads to a specific snapshot. `None` (the default) reads the current
+    /// snapshot. The snapshot id flows into both file planning and the produced
+    /// [`IcebergTableScan`], so it is honored consistently — including when the
+    /// scan is serialized and replayed by a distributed engine.
+    #[must_use]
+    pub fn with_snapshot_id(mut self, snapshot_id: Option<i64>) -> Self {
+        self.snapshot_id = snapshot_id;
+        self
+    }
+
+    /// Returns the pinned snapshot id, if any.
+    #[must_use]
+    pub fn snapshot_id(&self) -> Option<i64> {
+        self.snapshot_id
     }
 
     pub(crate) async fn metadata_table(
@@ -150,6 +172,11 @@ impl TableProvider for IcebergTableProvider {
         let predicate = convert_filters_to_predicate(filters);
 
         let mut builder = table.scan();
+        // Pin file planning to the requested snapshot when set, so a distributed
+        // engine plans every task of one query against the same snapshot.
+        if let Some(snapshot_id) = self.snapshot_id {
+            builder = builder.snapshot_id(snapshot_id);
+        }
         builder = match col_names {
             Some(names) => builder.select(names),
             None => builder.select_all(),
@@ -207,7 +234,7 @@ impl TableProvider for IcebergTableProvider {
 
         Ok(Arc::new(IcebergTableScan::new_with_tasks(
             table,
-            None, // Always use current snapshot for catalog-backed provider
+            self.snapshot_id, // None = current snapshot; Some pins reads (e.g. distributed)
             self.schema.clone(),
             projection,
             filters,
