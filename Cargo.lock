@@ -3751,8 +3751,8 @@ dependencies = [
  "pretty_assertions",
  "rand 0.9.4",
  "regex",
- "reqwest 0.12.28",
- "reqwest-middleware 0.4.2",
+ "reqwest 0.13.3",
+ "reqwest-middleware",
  "roaring",
  "serde",
  "serde_arrow",
@@ -3832,7 +3832,7 @@ dependencies = [
  "iceberg-catalog-sql",
  "iceberg-storage-opendal",
  "iceberg_test_utils",
- "reqwest 0.12.28",
+ "reqwest 0.13.3",
  "rstest",
  "sqlx",
  "tempfile",
@@ -3854,8 +3854,8 @@ dependencies = [
  "iceberg_test_utils",
  "itertools 0.13.0",
  "mockito",
- "reqwest 0.12.28",
- "reqwest-middleware 0.4.2",
+ "reqwest 0.13.3",
+ "reqwest-middleware",
  "serde",
  "serde_derive",
  "serde_json",
@@ -4002,7 +4002,7 @@ dependencies = [
  "opendal",
  "reqsign-aws-v4",
  "reqsign-core",
- "reqwest 0.12.28",
+ "reqwest 0.13.3",
  "serde",
  "tokio",
  "typetag",
@@ -6392,6 +6392,7 @@ dependencies = [
  "rustls-platform-verifier",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
@@ -6408,21 +6409,6 @@ dependencies = [
 
 [[package]]
 name = "reqwest-middleware"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57f17d28a6e6acfe1733fe24bcd30774d13bffa4b8a22535b4c8c98423088d4e"
-dependencies = [
- "anyhow",
- "async-trait",
- "http 1.4.0",
- "reqwest 0.12.28",
- "serde",
- "thiserror 1.0.69",
- "tower-service",
-]
-
-[[package]]
-name = "reqwest-middleware"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07bc3f1384cffa4f274dad2d4ddd73aed32fed8f786d96c6be8aa4e5fd3c3b58"
@@ -6431,6 +6417,7 @@ dependencies = [
  "async-trait",
  "http 1.4.0",
  "reqwest 0.13.3",
+ "serde",
  "thiserror 2.0.18",
  "tower-service",
 ]
@@ -9146,7 +9133,7 @@ dependencies = [
  "rand 0.10.1",
  "redb",
  "reqwest 0.13.3",
- "reqwest-middleware 0.5.2",
+ "reqwest-middleware",
  "serde",
  "serde_json",
  "serde_repr",
