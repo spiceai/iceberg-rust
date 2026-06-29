@@ -127,7 +127,11 @@ pretty_assertions = "1.4"
 pyo3 = "0.28"
 rand = "0.9.3"
 regex = "1.11.3"
-reqwest = { version = "0.13", default-features = false, features = ["json", "query", "form"] }
+reqwest = { version = "0.13", default-features = false, features = [
+  "json",
+  "query",
+  "form",
+] }
 reqwest-middleware = { version = "0.5.0", features = ["json", "query", "form"] }
 roaring = { version = "0.11" }
 rstest = "0.26"
