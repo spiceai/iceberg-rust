@@ -50,7 +50,6 @@ use crate::{Error, ErrorKind};
 /// ```
 pub struct RowDeltaAction {
     commit_uuid: Option<Uuid>,
-    key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
     added_delete_files: Vec<DataFile>,
@@ -60,7 +59,6 @@ impl RowDeltaAction {
     pub(crate) fn new() -> Self {
         Self {
             commit_uuid: None,
-            key_metadata: None,
             snapshot_properties: HashMap::default(),
             added_data_files: vec![],
             added_delete_files: vec![],
@@ -82,12 +80,6 @@ impl RowDeltaAction {
     /// Set commit UUID for the snapshot.
     pub fn set_commit_uuid(mut self, commit_uuid: Uuid) -> Self {
         self.commit_uuid = Some(commit_uuid);
-        self
-    }
-
-    /// Set key metadata for manifest files.
-    pub fn set_key_metadata(mut self, key_metadata: Vec<u8>) -> Self {
-        self.key_metadata = Some(key_metadata);
         self
     }
 
@@ -121,7 +113,6 @@ impl TransactionAction for RowDeltaAction {
         let snapshot_producer = SnapshotProducer::new(
             table,
             self.commit_uuid.unwrap_or_else(Uuid::now_v7),
-            self.key_metadata.clone(),
             self.snapshot_properties.clone(),
             self.added_data_files.clone(),
         )
@@ -177,11 +168,10 @@ impl SnapshotProduceOperation for RowDeltaOperation {
             return Ok(vec![]);
         };
 
-        let manifest_list = snapshot
-            .load_manifest_list(
-                snapshot_produce.table.file_io(),
-                &snapshot_produce.table.metadata_ref(),
-            )
+        let manifest_list = snapshot_produce
+            .table
+            .manifest_list_reader(snapshot)
+            .load()
             .await?;
 
         Ok(manifest_list
@@ -200,7 +190,7 @@ mod tests {
 
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH,
-        ManifestContentType, Struct,
+        ManifestContentType, SnapshotRef, Struct,
     };
     use crate::transaction::tests::{make_v1_table, make_v2_minimal_table};
     use crate::transaction::{Transaction, TransactionAction};
@@ -273,7 +263,7 @@ mod tests {
 
         // Check operation is Delete when only delete files present
         let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
-            snapshot
+            SnapshotRef::new(snapshot.clone())
         } else {
             unreachable!()
         };
@@ -297,8 +287,9 @@ mod tests {
         );
 
         // Check manifest list: should have 1 manifest (the delete manifest)
-        let manifest_list = new_snapshot
-            .load_manifest_list(table.file_io(), table.metadata())
+        let manifest_list = table
+            .manifest_list_reader(&new_snapshot)
+            .load()
             .await
             .unwrap();
         assert_eq!(1, manifest_list.entries().len());
@@ -336,7 +327,7 @@ mod tests {
 
         // Check operation is Overwrite when both data and delete files present
         let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
-            snapshot
+            SnapshotRef::new(snapshot.clone())
         } else {
             unreachable!()
         };
@@ -346,10 +337,11 @@ mod tests {
         );
 
         // Check manifest list: should have 2 manifests (data + delete)
-        let manifest_list = new_snapshot
-            .load_manifest_list(table.file_io(), table.metadata())
-            .await
-            .unwrap();
+        let manifest_list = table
+            .manifest_list_reader(&new_snapshot)
+            .load()
+        .await
+        .unwrap();
         assert_eq!(2, manifest_list.entries().len());
 
         // Find the data manifest and delete manifest
@@ -395,15 +387,16 @@ mod tests {
         let updates = action_commit.take_updates();
 
         let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
-            snapshot
+            SnapshotRef::new(snapshot.clone())
         } else {
             unreachable!()
         };
 
-        let manifest_list = new_snapshot
-            .load_manifest_list(table.file_io(), table.metadata())
-            .await
-            .unwrap();
+        let manifest_list = table
+            .manifest_list_reader(&new_snapshot)
+            .load()
+        .await
+        .unwrap();
         assert_eq!(1, manifest_list.entries().len());
         assert_eq!(
             manifest_list.entries()[0].content,
@@ -478,7 +471,7 @@ mod tests {
         let updates = action_commit.take_updates();
 
         let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
-            snapshot
+            SnapshotRef::new(snapshot.clone())
         } else {
             unreachable!()
         };
@@ -508,15 +501,16 @@ mod tests {
         let updates = action_commit.take_updates();
 
         let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
-            snapshot
+            SnapshotRef::new(snapshot.clone())
         } else {
             unreachable!()
         };
 
-        let manifest_list = new_snapshot
-            .load_manifest_list(table.file_io(), table.metadata())
-            .await
-            .unwrap();
+        let manifest_list = table
+            .manifest_list_reader(&new_snapshot)
+            .load()
+        .await
+        .unwrap();
         assert_eq!(1, manifest_list.entries().len());
         assert_eq!(
             manifest_list.entries()[0].content,
@@ -547,7 +541,7 @@ mod tests {
         let updates = action_commit.take_updates();
 
         let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
-            snapshot
+            SnapshotRef::new(snapshot.clone())
         } else {
             unreachable!()
         };
