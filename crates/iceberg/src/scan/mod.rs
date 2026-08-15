@@ -61,6 +61,7 @@ pub struct TableScanBuilder<'a> {
     concurrency_limit_manifest_files: usize,
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+    limit: Option<usize>,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -79,7 +80,14 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: num_cpus,
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
+            limit: None,
         }
+    }
+
+    /// Sets the maximum number of records to return
+    pub fn with_limit(mut self, limit: Option<usize>) -> Self {
+        self.limit = limit;
+        self
     }
 
     /// Sets the desired size of batches in the response
@@ -310,6 +318,7 @@ impl<'a> TableScanBuilder<'a> {
             object_cache: self.table.object_cache(),
             field_ids: Arc::new(field_ids),
             name_mapping,
+            limit: self.limit,
             partition_filter_cache: Arc::new(PartitionFilterCache::new()),
             manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
             expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
