@@ -340,8 +340,8 @@ mod tests {
         let manifest_list = table
             .manifest_list_reader(&new_snapshot)
             .load()
-        .await
-        .unwrap();
+            .await
+            .unwrap();
         assert_eq!(2, manifest_list.entries().len());
 
         // Find the data manifest and delete manifest
@@ -395,8 +395,8 @@ mod tests {
         let manifest_list = table
             .manifest_list_reader(&new_snapshot)
             .load()
-        .await
-        .unwrap();
+            .await
+            .unwrap();
         assert_eq!(1, manifest_list.entries().len());
         assert_eq!(
             manifest_list.entries()[0].content,
@@ -509,8 +509,8 @@ mod tests {
         let manifest_list = table
             .manifest_list_reader(&new_snapshot)
             .load()
-        .await
-        .unwrap();
+            .await
+            .unwrap();
         assert_eq!(1, manifest_list.entries().len());
         assert_eq!(
             manifest_list.entries()[0].content,
