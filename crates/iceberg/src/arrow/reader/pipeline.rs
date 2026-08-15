@@ -104,8 +104,9 @@ struct FileScanTaskReader {
 
 impl FileScanTaskReader {
     async fn process(self, task: FileScanTask) -> Result<ArrowRecordBatchStream> {
-        let should_load_page_index =
-            (self.row_selection_enabled && task.predicate.is_some()) || !task.deletes.is_empty();
+        let should_load_page_index = (self.row_selection_enabled && task.predicate.is_some())
+            || !task.deletes.is_empty()
+            || task.limit.is_some();
         let mut parquet_read_options = self.parquet_read_options;
         parquet_read_options.preload_page_index = should_load_page_index;
 
@@ -387,6 +388,10 @@ impl FileScanTaskReader {
         if let Some(selected_row_group_indices) = selected_row_group_indices {
             record_batch_stream_builder =
                 record_batch_stream_builder.with_row_groups(selected_row_group_indices);
+        }
+
+        if let Some(limit) = task.limit {
+            record_batch_stream_builder = record_batch_stream_builder.with_limit(limit);
         }
 
         // Build the batch stream and send all the RecordBatches that it generates
