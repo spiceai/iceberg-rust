@@ -28,20 +28,19 @@ use std::fmt;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use aes_gcm::aead::OsRng;
-use aes_gcm::aead::rand_core::RngCore;
 use chrono::Utc;
 use moka::future::Cache;
 use uuid::Uuid;
 
 const MILLIS_IN_DAY: i64 = 24 * 60 * 60 * 1000;
 
-use super::crypto::{AesGcmCipher, AesKeySize, SecureKey, SensitiveBytes};
+use super::crypto::{AesGcmCipher, AesKeySize, SecureKey};
 use super::io::EncryptedOutputFile;
 use super::key_metadata::StandardKeyMetadata;
 use super::kms::KeyManagementClient;
 use crate::io::OutputFile;
-use crate::spec::EncryptedKey;
+use crate::sensitive::SensitiveBytes;
+use crate::spec::{EncryptedKey, FormatVersion, TableMetadataRef};
 use crate::{Error, ErrorKind, Result};
 
 /// Property key for the KEK creation timestamp (milliseconds since epoch).
@@ -53,10 +52,6 @@ const DEFAULT_KEK_LIFESPAN_DAYS: i64 = 730;
 
 /// Default cache TTL for unwrapped KEKs.
 const DEFAULT_CACHE_TTL: Duration = Duration::from_secs(3600);
-
-/// Default AAD prefix length in bytes.
-/// Matches Java's `TableProperties.ENCRYPTION_AAD_LENGTH_DEFAULT`.
-const AAD_PREFIX_LENGTH: usize = 16;
 
 /// File-level encryption manager using two-layer envelope encryption.
 ///
@@ -105,15 +100,57 @@ impl fmt::Debug for EncryptionManager {
 }
 
 impl EncryptionManager {
+    /// Attempt to construct an [`EncryptionManager`] from table metadata.
+    ///
+    /// Returns `Ok(None)` if the format version is below v3 or the
+    /// `encryption.key-id` property is not set. Returns an error if the
+    /// property is set but no [`KeyManagementClient`] was provided.
+    pub(crate) fn from_table_metadata(
+        kms_client: Option<&Arc<dyn KeyManagementClient>>,
+        metadata: &TableMetadataRef,
+    ) -> Result<Option<Arc<Self>>> {
+        if metadata.format_version() < FormatVersion::V3 {
+            return Ok(None);
+        }
+
+        let table_properties = metadata.table_properties()?;
+        let Some(table_key_id) = table_properties.encryption_key_id.as_deref() else {
+            if kms_client.is_some() {
+                tracing::warn!(
+                    "KeyManagementClient provided but table does not have encryption.key-id set"
+                );
+            }
+            return Ok(None);
+        };
+
+        let kms_client = kms_client.ok_or_else(|| {
+            Error::new(
+                ErrorKind::PreconditionFailed,
+                "Table has encryption.key-id set but no KeyManagementClient was provided to TableBuilder",
+            )
+        })?;
+
+        let em = EncryptionManager::builder()
+            .kms_client(Arc::clone(kms_client))
+            .table_key_id(table_key_id)
+            .encryption_keys(metadata.encryption_keys.clone())
+            .key_size(table_properties.data_encryption_key_size()?)
+            .build();
+        Ok(Some(Arc::new(em)))
+    }
+
+    /// Generate key metadata for a single file: a fresh DEK of the table's
+    /// configured key length together with a fresh AAD prefix.
+    pub fn generate_key_metadata(&self) -> StandardKeyMetadata {
+        StandardKeyMetadata::generate(self.key_size)
+    }
+
     /// Encrypt a file with AGS1 stream encryption.
     ///
     /// Returns an [`EncryptedOutputFile`] that transparently encrypts on
     /// write, along with key metadata for later decryption.
     pub fn encrypt(&self, raw_output: OutputFile) -> EncryptedOutputFile {
-        let dek = SecureKey::generate(self.key_size);
-        let aad_prefix = Self::generate_aad_prefix();
-        let metadata = StandardKeyMetadata::new(dek.as_bytes()).with_aad_prefix(&aad_prefix);
-        EncryptedOutputFile::new(raw_output, metadata)
+        EncryptedOutputFile::new(raw_output, self.generate_key_metadata())
     }
 
     /// Wrap a manifest list key metadata with a KEK for storage in table metadata.
@@ -356,13 +393,6 @@ impl EncryptionManager {
             })
     }
 
-    /// Generate a random AAD prefix for file encryption.
-    fn generate_aad_prefix() -> Box<[u8]> {
-        let mut prefix = vec![0u8; AAD_PREFIX_LENGTH];
-        OsRng.fill_bytes(&mut prefix);
-        prefix.into_boxed_slice()
-    }
-
     /// Wrap a DEK with a KEK using local AES-GCM.
     fn wrap_dek_with_kek(
         &self,
@@ -419,7 +449,9 @@ mod tests {
     }
 
     fn sample_key_metadata() -> StandardKeyMetadata {
-        StandardKeyMetadata::new(b"0123456789abcdef").with_aad_prefix(b"test-aad-prefix!")
+        StandardKeyMetadata::try_new(b"0123456789abcdef")
+            .unwrap()
+            .with_aad_prefix(b"test-aad-prefix!")
     }
 
     #[tokio::test]

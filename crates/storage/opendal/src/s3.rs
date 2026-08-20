@@ -109,7 +109,7 @@ pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config
     if let Some(allow_anonymous) = m.remove(S3_ALLOW_ANONYMOUS)
         && is_truthy(allow_anonymous.to_lowercase().as_str())
     {
-        cfg.allow_anonymous = true;
+        cfg.skip_signature = true;
     }
     if let Some(disable_ec2_metadata) = m.remove(S3_DISABLE_EC2_METADATA)
         && is_truthy(disable_ec2_metadata.to_lowercase().as_str())
@@ -150,7 +150,7 @@ pub(crate) fn s3_config_build(
         builder = builder.credential_provider_chain(chain);
     }
 
-    Ok(Operator::new(builder).map_err(from_opendal_error)?.finish())
+    Operator::new(builder).map_err(from_opendal_error)
 }
 
 /// Custom AWS credential loader.

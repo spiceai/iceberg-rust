@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -16,37 +15,35 @@
 # specific language governing permissions and limitations
 # under the License.
 
+[package]
+edition = { workspace = true }
+homepage = { workspace = true }
+name = "iceberg-property-macro"
+publish = true
+readme = "README.md"
+rust-version = { workspace = true }
+version = { workspace = true }
 
-import subprocess
-import sys
-import os
+license = { workspace = true }
+repository = { workspace = true }
 
-BASE_DIR = os.getcwd()
+categories = ["database"]
+description = "Property derive macro for Apache Iceberg Rust"
+keywords = ["iceberg"]
 
+[lib]
+proc-macro = true
 
-def check_rust():
-    try:
-        subprocess.run(["cargo", "--version"], check=True)
-        return True
-    except FileNotFoundError:
-        return False
-    except Exception as e:
-        raise Exception("Check rust met unexpected error", e)
+[dependencies]
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true, features = ["full"] }
 
-def build_core():
-    print("Start building iceberg rust")
+[dev-dependencies]
+iceberg = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+trybuild = { workspace = true }
 
-    subprocess.run(["cargo", "build", "--release"], check=True)
-
-def main():
-    if not check_rust():
-        print(
-            "Cargo is not found, please check if rust development has been setup correctly"
-        )
-        print("Visit https://www.rust-lang.org/tools/install for more information")
-        sys.exit(1)
-
-    build_core()
-
-if __name__ == "__main__":
-    main()
+[lints]
+workspace = true
