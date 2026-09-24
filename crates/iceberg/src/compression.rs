@@ -95,9 +95,10 @@ impl<'de> Deserialize<'de> for CompressionCodec {
             "zstd" => Ok(CompressionCodec::zstd_default()),
             "gzip" => Ok(CompressionCodec::gzip_default()),
             "snappy" => Ok(CompressionCodec::Snappy),
-            other => Err(serde::de::Error::unknown_variant(other, &[
-                "none", "lz4", "zstd", "gzip", "snappy",
-            ])),
+            other => Err(serde::de::Error::unknown_variant(
+                other,
+                &["none", "lz4", "zstd", "gzip", "snappy"],
+            )),
         }
     }
 }
