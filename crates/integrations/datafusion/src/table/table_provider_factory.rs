@@ -21,9 +21,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider, TableProviderFactory};
+use datafusion::common::TableReference;
 use datafusion::error::Result as DFResult;
 use datafusion::logical_expr::CreateExternalTable;
-use datafusion::common::TableReference;
 use iceberg::io::{FileIOBuilder, LocalFsStorageFactory, StorageFactory};
 use iceberg::table::StaticTable;
 use iceberg::{Error, ErrorKind, Result, TableIdent};
@@ -229,12 +229,12 @@ mod tests {
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::catalog::TableProviderFactory;
+    use datafusion::common::TableReference;
     use datafusion::common::{Constraints, DFSchema};
     use datafusion::execution::session_state::SessionStateBuilder;
     use datafusion::logical_expr::CreateExternalTable;
     use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use datafusion::prelude::SessionContext;
-    use datafusion::common::TableReference;
 
     use super::*;
 
