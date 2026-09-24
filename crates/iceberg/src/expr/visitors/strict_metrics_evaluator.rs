@@ -40,8 +40,8 @@ pub(crate) struct StrictMetricsEvaluator<'a> {
     data_file: &'a DataFile,
 }
 
+#[allow(dead_code)]
 impl<'a> StrictMetricsEvaluator<'a> {
-    #[allow(dead_code)]
     fn new(data_file: &'a DataFile) -> Self {
         StrictMetricsEvaluator { data_file }
     }
@@ -50,7 +50,6 @@ impl<'a> StrictMetricsEvaluator<'a> {
     /// provided [`DataFile`]'s metrics. Used by [`TableScan`] to
     /// see if this `DataFile` contains data that could match
     /// the scan's filter.
-    #[allow(dead_code)]
     pub(crate) fn eval(filter: &'a BoundPredicate, data_file: &'a DataFile) -> crate::Result<bool> {
         if data_file.record_count == 0 {
             return ROWS_MUST_MATCH;
