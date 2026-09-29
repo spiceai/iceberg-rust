@@ -1313,12 +1313,9 @@ mod tests {
 
         let (catalog, namespace, table_name, _temp_dir) =
             make_partitioned_catalog_and_table_for_bucketing().await;
-        append_partitioned_fake_data_files(
-            &catalog,
-            &namespace,
-            &table_name,
-            vec!["a", "b", "c", "a", "b", "c"],
-        )
+        append_partitioned_fake_data_files(&catalog, &namespace, &table_name, vec![
+            "a", "b", "c", "a", "b", "c",
+        ])
         .await;
 
         let provider = IcebergTableProvider::try_new(catalog, namespace, table_name)

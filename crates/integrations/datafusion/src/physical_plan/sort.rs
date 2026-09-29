@@ -147,13 +147,10 @@ mod tests {
             Field::new("name", DataType::Utf8, false),
         ]));
 
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(Int32Array::from(vec![1, 2, 3])),
-                Arc::new(StringArray::from(vec!["a", "b", "c"])),
-            ],
-        )
+        let batch = RecordBatch::try_new(schema.clone(), vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(StringArray::from(vec!["a", "b", "c"])),
+        ])
         .unwrap();
 
         let ctx = SessionContext::new();

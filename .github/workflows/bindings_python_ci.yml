@@ -56,15 +56,15 @@ jobs:
           enable-cache: true
       - name: Install tools
         run: |
-          uv tool install ruff
+          uv tool install 'ruff<0.16'
       - name: Check format
         working-directory: "bindings/python"
         run: |
-          uvx ruff format . --diff
+          uvx --from 'ruff<0.16' ruff format . --diff
       - name: Check style
         working-directory: "bindings/python"
         run: |
-          uvx ruff check .
+          uvx --from 'ruff<0.16' ruff check .
 
   test:
     runs-on: ${{ matrix.os }}
