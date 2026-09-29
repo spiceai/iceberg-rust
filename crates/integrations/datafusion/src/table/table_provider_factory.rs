@@ -41,9 +41,9 @@ use crate::to_datafusion_error;
 /// ```
 /// use std::sync::Arc;
 ///
+/// use datafusion::common::TableReference;
 /// use datafusion::execution::session_state::SessionStateBuilder;
 /// use datafusion::prelude::*;
-/// use datafusion::common::TableReference;
 /// use iceberg_datafusion::IcebergTableProviderFactory;
 ///
 /// #[tokio::main]
@@ -229,8 +229,7 @@ mod tests {
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::catalog::TableProviderFactory;
-    use datafusion::common::TableReference;
-    use datafusion::common::{Constraints, DFSchema};
+    use datafusion::common::{Constraints, DFSchema, TableReference};
     use datafusion::execution::session_state::SessionStateBuilder;
     use datafusion::logical_expr::CreateExternalTable;
     use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;

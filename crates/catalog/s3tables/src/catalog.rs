@@ -729,9 +729,7 @@ impl Catalog for S3TablesCatalog {
 
 /// Format AWS SDK error into iceberg error
 pub(crate) fn from_aws_sdk_error<T>(error: aws_sdk_s3tables::error::SdkError<T>) -> Error
-where
-    T: std::fmt::Debug,
-{
+where T: std::fmt::Debug {
     Error::new(
         ErrorKind::Unexpected,
         format!("Operation failed for hitting aws sdk error: {error:?}"),
@@ -1268,10 +1266,9 @@ mod tests {
                 .try_into()
                 .unwrap(),
         );
-        let batch = arrow_array::RecordBatch::try_new(
-            arrow_schema,
-            vec![Arc::new(arrow_array::Int32Array::from(vec![42]))],
-        )
+        let batch = arrow_array::RecordBatch::try_new(arrow_schema, vec![Arc::new(
+            arrow_array::Int32Array::from(vec![42]),
+        )])
         .unwrap();
 
         // Locations will be generated based on the table metadata, which will be using `s3://` for Amazon S3 Tables.
