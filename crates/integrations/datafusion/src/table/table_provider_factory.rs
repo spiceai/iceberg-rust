@@ -21,9 +21,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider, TableProviderFactory};
+use datafusion::common::TableReference;
 use datafusion::error::Result as DFResult;
 use datafusion::logical_expr::CreateExternalTable;
-use datafusion::sql::TableReference;
 use iceberg::io::{FileIOBuilder, LocalFsStorageFactory, StorageFactory};
 use iceberg::table::StaticTable;
 use iceberg::{Error, ErrorKind, Result, TableIdent};
@@ -43,7 +43,7 @@ use crate::to_datafusion_error;
 ///
 /// use datafusion::execution::session_state::SessionStateBuilder;
 /// use datafusion::prelude::*;
-/// use datafusion::sql::TableReference;
+/// use datafusion::common::TableReference;
 /// use iceberg_datafusion::IcebergTableProviderFactory;
 ///
 /// #[tokio::main]
@@ -126,7 +126,18 @@ impl TableProviderFactory for IcebergTableProviderFactory {
         check_cmd(cmd).map_err(to_datafusion_error)?;
 
         let table_name = &cmd.name;
-        let metadata_file_path = &cmd.location;
+        let metadata_file_path = match cmd.locations.as_slice() {
+            [location] => location,
+            _ => {
+                return Err(to_datafusion_error(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!(
+                        "Expected exactly one LOCATION for an Iceberg external table, got {}",
+                        cmd.locations.len()
+                    ),
+                )));
+            }
+        };
         let options = &cmd.options;
 
         let table_name_with_ns = complement_namespace_if_necessary(table_name);
@@ -218,12 +229,12 @@ mod tests {
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::catalog::TableProviderFactory;
+    use datafusion::common::TableReference;
     use datafusion::common::{Constraints, DFSchema};
     use datafusion::execution::session_state::SessionStateBuilder;
     use datafusion::logical_expr::CreateExternalTable;
     use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use datafusion::prelude::SessionContext;
-    use datafusion::sql::TableReference;
 
     use super::*;
 
@@ -257,7 +268,7 @@ mod tests {
 
         CreateExternalTable {
             name: TableReference::partial("static_ns", "static_table"),
-            location: metadata_file_path,
+            locations: vec![metadata_file_path],
             schema: Arc::new(DFSchema::empty()),
             file_type: "iceberg".to_string(),
             options: Default::default(),
