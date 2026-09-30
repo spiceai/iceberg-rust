@@ -124,6 +124,18 @@ impl DisplayAs for IcebergCommitExec {
 }
 
 impl ExecutionPlan for IcebergCommitExec {
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion::physical_expr::PhysicalExpr>,
+        ) -> datafusion::common::Result<
+            datafusion::common::tree_node::TreeNodeRecursion,
+        >,
+    ) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion> {
+        // Holds no physical expressions (filters are iceberg predicates).
+        Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
+    }
+
     fn name(&self) -> &str {
         "IcebergCommitExec"
     }
@@ -322,6 +334,18 @@ mod tests {
     }
 
     impl ExecutionPlan for MockWriteExec {
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(
+                &Arc<dyn datafusion::physical_expr::PhysicalExpr>,
+            ) -> datafusion::common::Result<
+                datafusion::common::tree_node::TreeNodeRecursion,
+            >,
+        ) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion> {
+            // Holds no physical expressions (filters are iceberg predicates).
+            Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
+        }
+
         fn name(&self) -> &str {
             "MockWriteExec"
         }

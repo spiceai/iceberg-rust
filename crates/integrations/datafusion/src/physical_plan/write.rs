@@ -133,6 +133,18 @@ impl DisplayAs for IcebergWriteExec {
 }
 
 impl ExecutionPlan for IcebergWriteExec {
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion::physical_expr::PhysicalExpr>,
+        ) -> datafusion::common::Result<
+            datafusion::common::tree_node::TreeNodeRecursion,
+        >,
+    ) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion> {
+        // Holds no physical expressions (filters are iceberg predicates).
+        Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
+    }
+
     fn name(&self) -> &str {
         "IcebergWriteExec"
     }
@@ -370,6 +382,18 @@ mod tests {
     }
 
     impl ExecutionPlan for MockExecutionPlan {
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(
+                &Arc<dyn datafusion::physical_expr::PhysicalExpr>,
+            ) -> datafusion::common::Result<
+                datafusion::common::tree_node::TreeNodeRecursion,
+            >,
+        ) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion> {
+            // Holds no physical expressions (filters are iceberg predicates).
+            Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
+        }
+
         fn name(&self) -> &str {
             "MockExecutionPlan"
         }
