@@ -125,6 +125,18 @@ impl IcebergTableProvider {
         self.snapshot_id
     }
 
+    /// The catalog this table is loaded from on every scan and write.
+    #[must_use]
+    pub fn catalog(&self) -> &Arc<dyn Catalog> {
+        &self.catalog
+    }
+
+    /// The table's identifier in [`Self::catalog`].
+    #[must_use]
+    pub fn table_ident(&self) -> &TableIdent {
+        &self.table_ident
+    }
+
     pub(crate) async fn metadata_table(
         &self,
         r#type: MetadataTableType,
