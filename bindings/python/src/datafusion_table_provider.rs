@@ -16,7 +16,7 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::sync::Arc;
 
 use datafusion_ffi::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
@@ -121,8 +121,6 @@ impl PyIcebergDataFusionTable {
         py: Python<'py>,
         session: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyCapsule>> {
-        let capsule_name = CString::new("datafusion_table_provider").unwrap();
-
         let logical_codec = ffi_logical_codec_from_pycapsule(session)?;
 
         let ffi_provider = FFI_TableProvider::new_with_ffi_codec(
@@ -132,7 +130,7 @@ impl PyIcebergDataFusionTable {
             logical_codec,
         );
 
-        PyCapsule::new(py, ffi_provider, Some(capsule_name))
+        PyCapsule::new_with_value(py, ffi_provider, c"datafusion_table_provider")
     }
 }
 
