@@ -299,6 +299,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_create_rejects_zero_locations() {
+        let factory = IcebergTableProviderFactory::new();
+
+        let state = SessionStateBuilder::new().build();
+        let cmd = CreateExternalTable {
+            locations: vec![],
+            ..create_external_table_cmd()
+        };
+
+        let error = factory
+            .create(&state, &cmd)
+            .await
+            .expect_err("a command without a location should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("exactly one metadata file location, got 0"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_rejects_multiple_locations() {
+        let factory = IcebergTableProviderFactory::new();
+
+        let state = SessionStateBuilder::new().build();
+        let cmd = CreateExternalTable {
+            locations: vec![table_metadata_location(), table_metadata_location()],
+            ..create_external_table_cmd()
+        };
+
+        let error = factory
+            .create(&state, &cmd)
+            .await
+            .expect_err("a command with several locations should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("exactly one metadata file location, got 2"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
     async fn test_schema_of_created_external_table_sql() {
         let mut state = SessionStateBuilder::new().with_default_features().build();
         state.table_factories_mut().insert(
