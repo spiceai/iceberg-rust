@@ -166,7 +166,7 @@ zstd = "0.13.3"
 # Spice links iceberg-rust against its arrow-rs and DataFusion forks, so the tests here run
 # against the same forks.
 [patch.crates-io]
-# arrow-rs 59.3.0 with Spice patches — branch: spiceai-59-patches
+# arrow-rs 59.3.0 with Spice patches — branch: spiceai-59
 arrow = { git = "https://github.com/spiceai/arrow-rs.git", rev = "2e2cc330c64ac8a9e44d2a5f2da171b391f775b8" }
 arrow-arith = { git = "https://github.com/spiceai/arrow-rs.git", rev = "2e2cc330c64ac8a9e44d2a5f2da171b391f775b8" }
 arrow-array = { git = "https://github.com/spiceai/arrow-rs.git", rev = "2e2cc330c64ac8a9e44d2a5f2da171b391f775b8" }
@@ -185,7 +185,7 @@ arrow-select = { git = "https://github.com/spiceai/arrow-rs.git", rev = "2e2cc33
 arrow-string = { git = "https://github.com/spiceai/arrow-rs.git", rev = "2e2cc330c64ac8a9e44d2a5f2da171b391f775b8" }
 parquet = { git = "https://github.com/spiceai/arrow-rs.git", rev = "2e2cc330c64ac8a9e44d2a5f2da171b391f775b8" }
 
-# DataFusion 55.1.0 with Spice patches — branch: spiceai-55-patches
+# DataFusion 55.1.0 with Spice patches — branch: spiceai-55
 datafusion = { git = "https://github.com/spiceai/datafusion.git", rev = "02550cf9462b9f56506b6b1cd07eabf08c46e200" }
 datafusion-catalog = { git = "https://github.com/spiceai/datafusion.git", rev = "02550cf9462b9f56506b6b1cd07eabf08c46e200" }
 datafusion-catalog-listing = { git = "https://github.com/spiceai/datafusion.git", rev = "02550cf9462b9f56506b6b1cd07eabf08c46e200" }
