@@ -136,7 +136,7 @@ fn identity_hash(task: &FileScanTask, cols: &[IdentityCol]) -> Option<u64> {
     if cols.is_empty() {
         return None;
     }
-    let partition = task.partition.as_ref()?;
+    let partition = task.partition()?;
     let mut arrays: Vec<ArrayRef> = Vec::with_capacity(cols.len());
     for col in cols {
         let lit = partition.fields().get(col.spec_field_idx)?.as_ref()?;
@@ -159,7 +159,7 @@ fn fallback_hash(task: &FileScanTask) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     let mut hasher = DefaultHasher::new();
-    task.data_file_path.hash(&mut hasher);
+    task.data_file_path().hash(&mut hasher);
     hasher.finish()
 }
 

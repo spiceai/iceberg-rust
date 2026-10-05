@@ -28,8 +28,8 @@ use crate::scan::{
     PartitionFilterCache,
 };
 use crate::spec::{
-    ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, NameMapping, SchemaRef,
-    SnapshotRef, TableMetadataRef,
+    ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, NameMapping,
+    PartitionSpecRef, SchemaRef, SnapshotRef, StructType, TableMetadataRef,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -49,6 +49,8 @@ pub(crate) struct ManifestFileContext {
     delete_file_index: DeleteFileIndex,
     name_mapping: Option<Arc<NameMapping>>,
     case_sensitive: bool,
+    partition_spec: Option<PartitionSpecRef>,
+    unified_partition_type: Option<Arc<StructType>>,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -65,6 +67,8 @@ pub(crate) struct ManifestEntryContext {
     pub name_mapping: Option<Arc<NameMapping>>,
     pub case_sensitive: bool,
     pub limit: Option<usize>,
+    pub partition_spec: Option<PartitionSpecRef>,
+    pub unified_partition_type: Option<Arc<StructType>>,
 }
 
 impl ManifestFileContext {
@@ -83,6 +87,8 @@ impl ManifestFileContext {
             name_mapping,
             case_sensitive,
             limit,
+            partition_spec,
+            unified_partition_type,
         } = self;
 
         let manifest = object_cache.get_manifest(&manifest_file).await?;
@@ -100,6 +106,8 @@ impl ManifestFileContext {
                 name_mapping: name_mapping.clone(),
                 case_sensitive,
                 limit,
+                partition_spec: partition_spec.clone(),
+                unified_partition_type: unified_partition_type.clone(),
             };
 
             sender
@@ -122,13 +130,15 @@ impl ManifestEntryContext {
                 self.manifest_entry.data_file(),
                 self.manifest_entry.sequence_number(),
             )
-            .await;
+            .await?;
 
-        Ok(FileScanTask::builder()
+        FileScanTask::builder()
             .with_file_size_in_bytes(self.manifest_entry.file_size_in_bytes())
             .with_start(0)
             .with_length(self.manifest_entry.file_size_in_bytes())
             .with_record_count(Some(self.manifest_entry.record_count()))
+            .with_first_row_id(self.manifest_entry.data_file().first_row_id())
+            .with_data_sequence_number(self.manifest_entry.sequence_number())
             .with_data_file_path(self.manifest_entry.file_path().to_string())
             .with_data_file_format(self.manifest_entry.file_format())
             .with_schema(self.snapshot_schema)
@@ -139,12 +149,13 @@ impl ManifestEntryContext {
             )
             .with_deletes(deletes)
             .with_partition(Some(self.manifest_entry.data_file.partition.clone()))
-            // TODO: Pass actual PartitionSpec through context chain for native flow
-            .with_partition_spec(None)
+            .with_partition_spec(self.partition_spec.clone())
             .with_name_mapping(self.name_mapping)
+            .with_unified_partition_type(self.unified_partition_type.clone())
             .with_case_sensitive(self.case_sensitive)
             .with_limit(self.limit)
-            .build())
+            .with_key_metadata(self.manifest_entry.data_file.key_metadata().map(Box::from))
+            .build()
     }
 }
 
@@ -167,6 +178,8 @@ pub(crate) struct PlanContext {
     pub partition_filter_cache: Arc<PartitionFilterCache>,
     pub manifest_evaluator_cache: Arc<ManifestEvaluatorCache>,
     pub expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
+
+    pub unified_partition_type: Option<Arc<StructType>>,
 }
 
 impl PlanContext {
@@ -177,6 +190,8 @@ impl PlanContext {
             .await
     }
 
+    /// Returns the partition filter for a manifest. See [`PartitionFilterCache::get`] for the
+    /// always-true fallback when the manifest's spec cannot be resolved against the scan schema.
     fn get_partition_filter(&self, manifest_file: &ManifestFile) -> Result<Arc<BoundPredicate>> {
         let partition_spec_id = manifest_file.partition_spec_id;
 
@@ -291,6 +306,11 @@ impl PlanContext {
             delete_file_index,
             name_mapping: self.name_mapping.clone(),
             case_sensitive: self.case_sensitive,
+            partition_spec: self
+                .table_metadata
+                .partition_spec_by_id(manifest_file.partition_spec_id)
+                .cloned(),
+            unified_partition_type: self.unified_partition_type.clone(),
         }
     }
 }
