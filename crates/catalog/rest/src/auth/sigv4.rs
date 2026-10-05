@@ -660,7 +660,7 @@ mod tests {
 
     /// End-to-end against the AWS Glue Iceberg REST endpoint: AWS accepts a
     /// request only if its signature is valid, so this covers what the stub
-    /// tests cannot — GETs, POSTs with a signed JSON body, and DELETEs.
+    /// tests cannot: GET, POST with a signed JSON body, and DELETE requests.
     ///
     /// Uses the default AWS credentials chain. Creates and drops a uniquely
     /// named namespace (and a table when `ICEBERG_GLUE_TEST_LOCATION` is set;
