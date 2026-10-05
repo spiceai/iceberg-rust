@@ -443,6 +443,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_fails_without_credentials() {
+        let _guard = ENV_MUTEX.lock().await;
+        // Point every source of the default credentials chain at nothing, so
+        // the result does not depend on the machine running the test.
+        let isolated = [
+            (
+                "AWS_SHARED_CREDENTIALS_FILE",
+                Some("/nonexistent/credentials"),
+            ),
+            ("AWS_CONFIG_FILE", Some("/nonexistent/config")),
+            ("AWS_EC2_METADATA_DISABLED", Some("true")),
+            ("AWS_ACCESS_KEY_ID", None),
+            ("AWS_SECRET_ACCESS_KEY", None),
+            ("AWS_SESSION_TOKEN", None),
+            ("AWS_PROFILE", None),
+            ("AWS_WEB_IDENTITY_TOKEN_FILE", None),
+            ("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", None),
+            ("AWS_CONTAINER_CREDENTIALS_FULL_URI", None),
+        ];
+        let saved: Vec<_> = isolated
+            .iter()
+            .map(|(name, _)| (*name, env::var_os(name)))
+            .collect();
+        for (name, value) in isolated {
+            unsafe {
+                match value {
+                    Some(value) => env::set_var(name, value),
+                    None => env::remove_var(name),
+                }
+            }
+        }
+
+        let uri = "http://localhost:8181";
+        let manager = signer(sigv4_props(uri, false));
+        let result = authenticate(&manager, uri, &format!("{uri}/v1/config")).await;
+
+        for (name, value) in saved {
+            unsafe {
+                match value {
+                    Some(value) => env::set_var(name, value),
+                    None => env::remove_var(name),
+                }
+            }
+        }
+        let Err(err) = result else {
+            panic!("signing without credentials must fail");
+        };
+        assert_eq!(err.kind(), ErrorKind::Unexpected, "{err}");
+        assert!(err.to_string().contains("AWS credentials"), "{err}");
+    }
+
+    #[tokio::test]
     async fn test_skips_requests_outside_the_catalog() {
         let uri = "http://localhost:8181";
         let manager = signer(sigv4_props(uri, true));
