@@ -15,7 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Middleware that is applied on requests to the Rest Catalog API.
+/// Strips trailing slashes from a location, preserving a bare URI scheme root
+pub(crate) fn strip_trailing_slash(path: &str) -> &str {
+    let mut path = path;
+    while !path.ends_with("://") {
+        let Some(stripped) = path.strip_suffix('/') else {
+            break;
+        };
+        path = stripped;
+    }
+    path
+}
 
-#[cfg(feature = "sigv4")]
-pub(crate) mod sigv4;
+#[test]
+fn test_strip_trailing_slash() {
+    for (path, expected) in [
+        ("s3://bucket/db/tbl", "s3://bucket/db/tbl"),
+        ("s3://bucket/db/tbl/", "s3://bucket/db/tbl"),
+        ("s3://bucket/db/tbl////", "s3://bucket/db/tbl"),
+        ("blobstore://", "blobstore://"),
+        ("blobstore:///", "blobstore://"),
+        ("file:///", "file://"),
+        ("////", ""),
+        ("", ""),
+    ] {
+        assert_eq!(strip_trailing_slash(path), expected);
+    }
+}

@@ -332,11 +332,7 @@ impl TableProvider for IcebergTableProvider {
             sort_by_partition(repartitioned_plan)?
         };
 
-        let write_plan = Arc::new(IcebergWriteExec::new(
-            table.clone(),
-            write_input,
-            self.schema.clone(),
-        ));
+        let write_plan = Arc::new(IcebergWriteExec::new(table.clone(), write_input));
 
         // Merge the outputs of write_plan into one so we can commit all files together
         let coalesce_partitions = Arc::new(CoalescePartitionsExec::new(write_plan));
@@ -781,8 +777,7 @@ mod tests {
         let mut properties = HashMap::new();
         if let Some(enabled) = fanout_enabled {
             properties.insert(
-                iceberg::spec::TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED
-                    .to_string(),
+                TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED.to_string(),
                 enabled.to_string(),
             );
         }
@@ -1013,22 +1008,19 @@ mod tests {
     // ── Bucketed scan tests ──────────────────────────────────────────────────
 
     async fn make_catalog_and_table_for_bucketing()
-    -> (Arc<dyn Catalog>, NamespaceIdent, String, tempfile::TempDir) {
+    -> (Arc<dyn Catalog>, NamespaceIdent, String, TempDir) {
         use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
         use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
         use iceberg::{CatalogBuilder, TableCreation};
 
-        let temp_dir = tempfile::TempDir::new().unwrap();
+        let temp_dir = TempDir::new().unwrap();
         let warehouse = temp_dir.path().to_str().unwrap().to_string();
 
         let catalog = Arc::new(
             MemoryCatalogBuilder::default()
                 .load(
                     "memory",
-                    std::collections::HashMap::from([(
-                        MEMORY_CATALOG_WAREHOUSE.to_string(),
-                        warehouse.clone(),
-                    )]),
+                    HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), warehouse.clone())]),
                 )
                 .await
                 .unwrap(),
@@ -1036,7 +1028,7 @@ mod tests {
 
         let namespace = NamespaceIdent::new("ns".to_string());
         catalog
-            .create_namespace(&namespace, std::collections::HashMap::new())
+            .create_namespace(&namespace, HashMap::new())
             .await
             .unwrap();
 
@@ -1056,7 +1048,7 @@ mod tests {
                     .name("t".to_string())
                     .location(format!("{warehouse}/t"))
                     .schema(schema)
-                    .properties(std::collections::HashMap::new())
+                    .properties(HashMap::new())
                     .build(),
             )
             .await
@@ -1209,24 +1201,21 @@ mod tests {
     }
 
     async fn make_partitioned_catalog_and_table_for_bucketing()
-    -> (Arc<dyn Catalog>, NamespaceIdent, String, tempfile::TempDir) {
+    -> (Arc<dyn Catalog>, NamespaceIdent, String, TempDir) {
         use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
         use iceberg::spec::{
             NestedField, PrimitiveType, Schema, Transform, Type, UnboundPartitionSpec,
         };
         use iceberg::{CatalogBuilder, TableCreation};
 
-        let temp_dir = tempfile::TempDir::new().unwrap();
+        let temp_dir = TempDir::new().unwrap();
         let warehouse = temp_dir.path().to_str().unwrap().to_string();
 
         let catalog = Arc::new(
             MemoryCatalogBuilder::default()
                 .load(
                     "memory",
-                    std::collections::HashMap::from([(
-                        MEMORY_CATALOG_WAREHOUSE.to_string(),
-                        warehouse.clone(),
-                    )]),
+                    HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), warehouse.clone())]),
                 )
                 .await
                 .unwrap(),
@@ -1234,7 +1223,7 @@ mod tests {
 
         let namespace = NamespaceIdent::new("ns".to_string());
         catalog
-            .create_namespace(&namespace, std::collections::HashMap::new())
+            .create_namespace(&namespace, HashMap::new())
             .await
             .unwrap();
 
@@ -1261,7 +1250,7 @@ mod tests {
                     .location(format!("{warehouse}/t"))
                     .schema(schema)
                     .partition_spec(partition_spec)
-                    .properties(std::collections::HashMap::new())
+                    .properties(HashMap::new())
                     .build(),
             )
             .await

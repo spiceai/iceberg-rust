@@ -124,6 +124,18 @@ impl DisplayAs for IcebergCommitExec {
 }
 
 impl ExecutionPlan for IcebergCommitExec {
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion::physical_expr::PhysicalExpr>,
+        ) -> datafusion::common::Result<
+            datafusion::common::tree_node::TreeNodeRecursion,
+        >,
+    ) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion> {
+        // Holds no physical expressions (filters are iceberg predicates).
+        Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
+    }
+
     fn name(&self) -> &str {
         "IcebergCommitExec"
     }
@@ -322,6 +334,18 @@ mod tests {
     }
 
     impl ExecutionPlan for MockWriteExec {
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(
+                &Arc<dyn datafusion::physical_expr::PhysicalExpr>,
+            ) -> datafusion::common::Result<
+                datafusion::common::tree_node::TreeNodeRecursion,
+            >,
+        ) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion> {
+            // Holds no physical expressions (filters are iceberg predicates).
+            Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
+        }
+
         fn name(&self) -> &str {
             "MockWriteExec"
         }
@@ -503,8 +527,9 @@ mod tests {
         assert!(!manifest_list.entries().is_empty());
 
         // Load the first manifest and verify it contains our data files
-        let manifest = manifest_list.entries()[0]
-            .load_manifest(updated_table.file_io())
+        let manifest = updated_table
+            .manifest_reader()
+            .read(&manifest_list.entries()[0])
             .await?;
 
         // Verify that the manifest contains our data files
