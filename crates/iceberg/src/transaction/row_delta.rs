@@ -301,8 +301,9 @@ mod tests {
         );
 
         // Check manifest entries
-        let manifest = manifest_list.entries()[0]
-            .load_manifest(table.file_io())
+        let manifest = table
+            .manifest_reader()
+            .read(&manifest_list.entries()[0])
             .await
             .unwrap();
         assert_eq!(1, manifest.entries().len());
@@ -359,16 +360,18 @@ mod tests {
         assert_eq!(1, delete_manifests.len());
 
         // Verify data manifest contents
-        let data_manifest = data_manifests[0]
-            .load_manifest(table.file_io())
+        let data_manifest = table
+            .manifest_reader()
+            .read(data_manifests[0])
             .await
             .unwrap();
         assert_eq!(1, data_manifest.entries().len());
         assert_eq!(data_file, *data_manifest.entries()[0].data_file());
 
         // Verify delete manifest contents
-        let delete_manifest = delete_manifests[0]
-            .load_manifest(table.file_io())
+        let delete_manifest = table
+            .manifest_reader()
+            .read(delete_manifests[0])
             .await
             .unwrap();
         assert_eq!(1, delete_manifest.entries().len());
@@ -403,8 +406,9 @@ mod tests {
             ManifestContentType::Deletes
         );
 
-        let manifest = manifest_list.entries()[0]
-            .load_manifest(table.file_io())
+        let manifest = table
+            .manifest_reader()
+            .read(&manifest_list.entries()[0])
             .await
             .unwrap();
         assert_eq!(1, manifest.entries().len());
@@ -517,8 +521,9 @@ mod tests {
             ManifestContentType::Deletes
         );
 
-        let manifest = manifest_list.entries()[0]
-            .load_manifest(table.file_io())
+        let manifest = table
+            .manifest_reader()
+            .read(&manifest_list.entries()[0])
             .await
             .unwrap();
         assert_eq!(2, manifest.entries().len());

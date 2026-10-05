@@ -23,12 +23,13 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
+use iceberg::encryption::kms::{KmsClientFactory, MemoryKmsClientFactory};
 use iceberg::io::{
     FileIOBuilder, LocalFsStorageFactory, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_PATH_STYLE_ACCESS,
     S3_REGION, S3_SECRET_ACCESS_KEY,
 };
 use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
-use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
+use iceberg::spec::{FormatVersion, NestedField, PrimitiveType, Schema, TableProperties, Type};
 use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation};
 use iceberg_catalog_glue::{
     AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY, GLUE_CATALOG_PROP_URI,
@@ -90,19 +91,26 @@ pub struct CatalogHarness {
 // the same behavior against all backends.
 pub async fn load_catalog(kind: CatalogKind) -> Option<CatalogHarness> {
     set_up();
+    let factory = MemoryKmsClientFactory::new();
+    factory.add_master_key(TEST_MASTER_KEY_ID).unwrap();
+    let kms_client_factory = Arc::new(factory) as Arc<dyn KmsClientFactory>;
+
     match kind {
         CatalogKind::Rest => Some(CatalogHarness {
-            catalog: Arc::new(rest_catalog().await) as Arc<dyn Catalog>,
+            catalog: Arc::new(rest_catalog(Arc::clone(&kms_client_factory)).await)
+                as Arc<dyn Catalog>,
             label: "rest",
             _tempdirs: Vec::new(),
         }),
         CatalogKind::Glue => Some(CatalogHarness {
-            catalog: Arc::new(glue_catalog().await) as Arc<dyn Catalog>,
+            catalog: Arc::new(glue_catalog(Arc::clone(&kms_client_factory)).await)
+                as Arc<dyn Catalog>,
             label: "glue",
             _tempdirs: Vec::new(),
         }),
         CatalogKind::Hms => Some(CatalogHarness {
-            catalog: Arc::new(hms_catalog().await) as Arc<dyn Catalog>,
+            catalog: Arc::new(hms_catalog(Arc::clone(&kms_client_factory)).await)
+                as Arc<dyn Catalog>,
             label: "hms",
             _tempdirs: Vec::new(),
         }),
@@ -115,6 +123,7 @@ pub async fn load_catalog(kind: CatalogKind) -> Option<CatalogHarness> {
 
             let catalog = SqlCatalogBuilder::default()
                 .with_storage_factory(Arc::new(LocalFsStorageFactory))
+                .with_kms_client_factory(Arc::clone(&kms_client_factory))
                 .load(
                     "sql",
                     HashMap::from([
@@ -154,6 +163,7 @@ pub async fn load_catalog(kind: CatalogKind) -> Option<CatalogHarness> {
             }
 
             let catalog = S3TablesCatalogBuilder::default()
+                .with_kms_client_factory(Arc::clone(&kms_client_factory))
                 .load("s3tables", props)
                 .await
                 .unwrap();
@@ -171,6 +181,7 @@ pub async fn load_catalog(kind: CatalogKind) -> Option<CatalogHarness> {
                 warehouse_dir.path().to_str().unwrap().to_string(),
             )]);
             let catalog = MemoryCatalogBuilder::default()
+                .with_kms_client_factory(Arc::clone(&kms_client_factory))
                 .load("memory", props)
                 .await
                 .unwrap();
@@ -184,9 +195,11 @@ pub async fn load_catalog(kind: CatalogKind) -> Option<CatalogHarness> {
     }
 }
 
+pub const TEST_MASTER_KEY_ID: &str = "test-master-key";
+
 // Catalog-specific setup is intentionally isolated here so the suites
 // remain implementation-agnostic.
-async fn rest_catalog() -> RestCatalog {
+async fn rest_catalog(kms_client_factory: Arc<dyn KmsClientFactory>) -> RestCatalog {
     let rest_endpoint = get_rest_catalog_endpoint();
 
     let client = reqwest::Client::new();
@@ -207,6 +220,7 @@ async fn rest_catalog() -> RestCatalog {
 
     RestCatalogBuilder::default()
         .with_storage_factory(Arc::new(LocalFsStorageFactory))
+        .with_kms_client_factory(kms_client_factory)
         .load(
             "rest",
             HashMap::from([(REST_CATALOG_PROP_URI.to_string(), rest_endpoint)]),
@@ -215,7 +229,7 @@ async fn rest_catalog() -> RestCatalog {
         .unwrap()
 }
 
-async fn glue_catalog() -> GlueCatalog {
+async fn glue_catalog(kms_client_factory: Arc<dyn KmsClientFactory>) -> GlueCatalog {
     let glue_endpoint = get_glue_endpoint();
     let object_store_endpoint = get_object_store_endpoint();
 
@@ -258,12 +272,13 @@ async fn glue_catalog() -> GlueCatalog {
     glue_props.extend(props);
 
     GlueCatalogBuilder::default()
+        .with_kms_client_factory(kms_client_factory)
         .load("glue", glue_props)
         .await
         .unwrap()
 }
 
-async fn hms_catalog() -> HmsCatalog {
+async fn hms_catalog(kms_client_factory: Arc<dyn KmsClientFactory>) -> HmsCatalog {
     let hms_endpoint = get_hms_endpoint();
     let object_store_endpoint = get_object_store_endpoint();
 
@@ -303,6 +318,7 @@ async fn hms_catalog() -> HmsCatalog {
         .with_storage_factory(Arc::new(OpenDalStorageFactory::S3 {
             customized_credential_load: None,
         }))
+        .with_kms_client_factory(kms_client_factory)
         .load("hms", props)
         .await
         .unwrap()
@@ -324,6 +340,39 @@ pub fn table_creation(name: impl ToString) -> TableCreation {
         .properties(HashMap::new())
         .schema(schema)
         .build()
+}
+
+pub fn encrypted_table_creation(name: impl ToString) -> TableCreation {
+    TableCreation {
+        format_version: FormatVersion::V3,
+        properties: HashMap::from([(
+            TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
+            TEST_MASTER_KEY_ID.to_string(),
+        )]),
+        ..table_creation(name)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum TableMode {
+    Plain,
+    Encrypted,
+}
+
+impl TableMode {
+    pub fn table_creation(self, name: impl ToString) -> TableCreation {
+        match self {
+            Self::Plain => table_creation(name),
+            Self::Encrypted => encrypted_table_creation(name),
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Plain => "plain",
+            Self::Encrypted => "encrypted",
+        }
+    }
 }
 
 pub fn assert_map_contains(expected: &HashMap<String, String>, actual: &HashMap<String, String>) {
