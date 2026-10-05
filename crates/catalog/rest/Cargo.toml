@@ -56,8 +56,9 @@ bytes = { workspace = true }
 futures = { workspace = true }
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 mockito = { workspace = true }
-# `stream` lets tests build a streaming body to exercise HttpRequestBody::Streaming.
-reqwest = { workspace = true, features = ["stream"] }
+# `stream` lets tests build a streaming body to exercise HttpRequestBody::Streaming;
+# `rustls` lets the ignored AWS Glue end-to-end test reach an HTTPS endpoint.
+reqwest = { workspace = true, features = ["stream", "rustls"] }
 tokio = { workspace = true }
 wiremock = "=0.6.4"
 

@@ -657,4 +657,105 @@ mod tests {
                 .starts_with("AWS4-HMAC-SHA256 ")
         );
     }
+
+    /// End-to-end against the AWS Glue Iceberg REST endpoint: AWS accepts a
+    /// request only if its signature is valid, so this covers what the stub
+    /// tests cannot — GETs, POSTs with a signed JSON body, and DELETEs.
+    ///
+    /// Uses the default AWS credentials chain. Creates and drops a uniquely
+    /// named namespace (and a table when `ICEBERG_GLUE_TEST_LOCATION` is set;
+    /// dropping it does not purge the metadata file Glue writes there).
+    ///
+    /// ```text
+    /// ICEBERG_GLUE_TEST_REGION=us-west-2 ICEBERG_GLUE_TEST_ACCOUNT_ID=123456789012 \
+    /// ICEBERG_GLUE_TEST_LOCATION=s3://bucket/prefix \
+    /// cargo test -p iceberg-catalog-rest --lib test_glue_end_to_end -- --ignored --nocapture
+    /// ```
+    #[tokio::test]
+    #[ignore] // Requires AWS credentials and access to AWS Glue.
+    async fn test_glue_end_to_end() {
+        use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
+        use iceberg::{NamespaceIdent, TableCreation};
+
+        let region = env::var("ICEBERG_GLUE_TEST_REGION").expect("ICEBERG_GLUE_TEST_REGION");
+        let account_id =
+            env::var("ICEBERG_GLUE_TEST_ACCOUNT_ID").expect("ICEBERG_GLUE_TEST_ACCOUNT_ID");
+        let location = env::var("ICEBERG_GLUE_TEST_LOCATION").ok();
+
+        // Table objects need a FileIO; nothing is read or written through it.
+        let catalog = RestCatalogBuilder::default()
+            .with_storage_factory(Arc::new(iceberg::io::MemoryStorageFactory))
+            .load(
+                "glue",
+                HashMap::from([
+                    (
+                        REST_CATALOG_PROP_URI.to_string(),
+                        format!("https://glue.{region}.amazonaws.com/iceberg"),
+                    ),
+                    ("warehouse".to_string(), account_id),
+                    ("rest.sigv4-enabled".to_string(), "true".to_string()),
+                    ("rest.signing-region".to_string(), region),
+                    ("rest.signing-name".to_string(), "glue".to_string()),
+                ]),
+            )
+            .await
+            .unwrap();
+
+        let namespace = NamespaceIdent::new(format!(
+            "iceberg_rust_sigv4_e2e_{}",
+            &Uuid::new_v4().simple().to_string()[..8]
+        ));
+        let table = iceberg::TableIdent::new(namespace.clone(), "t".to_string());
+
+        // GET /v1/config, GET /v1/namespaces
+        catalog.list_namespaces(None).await.unwrap();
+        // POST /v1/namespaces with a JSON body
+        catalog
+            .create_namespace(
+                &namespace,
+                HashMap::from([("comment".to_string(), "iceberg-rust sigv4 e2e".to_string())]),
+            )
+            .await
+            .unwrap();
+        println!("created namespace {namespace:?}");
+
+        let result = async {
+            // GET /v1/namespaces/{ns}
+            catalog.get_namespace(&namespace).await?;
+            if let Some(location) = &location {
+                let schema = Schema::builder()
+                    .with_fields(vec![
+                        NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                    ])
+                    .build()?;
+                // POST /v1/namespaces/{ns}/tables with a larger JSON body
+                catalog
+                    .create_table(
+                        &namespace,
+                        TableCreation::builder()
+                            .name(table.name().to_string())
+                            .location(format!("{location}/{}/t", namespace.to_url_string()))
+                            .schema(schema)
+                            .build(),
+                    )
+                    .await?;
+                println!("created table {table}");
+                // GET /v1/namespaces/{ns}/tables/{t}
+                catalog.load_table(&table).await?;
+                // DELETE /v1/namespaces/{ns}/tables/{t}
+                catalog.drop_table(&table).await?;
+            }
+            Ok::<_, Error>(())
+        }
+        .await;
+
+        // DELETE /v1/namespaces/{ns}, attempted even if a step above failed.
+        if result.is_err() && location.is_some() {
+            let _ = catalog.drop_table(&table).await;
+        }
+        let dropped = catalog.drop_namespace(&namespace).await;
+        result.unwrap();
+        dropped.unwrap();
+        println!("dropped namespace {namespace:?}");
+    }
 }
