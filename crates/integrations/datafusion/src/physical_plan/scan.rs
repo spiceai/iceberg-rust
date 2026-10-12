@@ -221,7 +221,7 @@ impl ExecutionPlan for IcebergTableScan {
     fn execute(
         &self,
         partition: usize,
-        _context: Arc<TaskContext>,
+        context: Arc<TaskContext>,
     ) -> DFResult<SendableRecordBatchStream> {
         let bucket = match &self.buckets {
             Some(buckets) => Some(buckets.get(partition).cloned().ok_or_else(|| {
@@ -241,6 +241,7 @@ impl ExecutionPlan for IcebergTableScan {
             self.predicates.clone(),
             bucket,
             self.limit,
+            context.session_config().batch_size(),
         );
         let stream = Box::pin(futures::stream::once(fut).try_flatten())
             as Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>>;
@@ -290,13 +291,15 @@ impl DisplayAs for IcebergTableScan {
 }
 
 /// Builds a [`TableScan`] mirroring the projection, filters and limit of the
-/// owning [`IcebergTableScan`].
+/// owning [`IcebergTableScan`], decoding batches of the session's
+/// `batch_size` rows rather than the Parquet reader's 1024-row default.
 fn build_table_scan(
     table: Table,
     snapshot_id: Option<i64>,
     column_names: Option<Vec<String>>,
     predicates: Option<Predicate>,
     limit: Option<usize>,
+    batch_size: usize,
 ) -> DFResult<TableScan> {
     let scan_builder = match snapshot_id {
         Some(id) => table.scan().snapshot_id(id),
@@ -309,7 +312,9 @@ fn build_table_scan(
     if let Some(pred) = predicates {
         scan_builder = scan_builder.with_filter(pred);
     }
-    scan_builder = scan_builder.with_limit(limit);
+    scan_builder = scan_builder
+        .with_limit(limit)
+        .with_batch_size(Some(batch_size));
     scan_builder.build().map_err(to_datafusion_error)
 }
 
@@ -323,8 +328,16 @@ async fn build_record_batch_stream(
     predicates: Option<Predicate>,
     bucket: Option<Vec<FileScanTask>>,
     limit: Option<usize>,
+    batch_size: usize,
 ) -> DFResult<Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>>> {
-    let table_scan = build_table_scan(table, snapshot_id, column_names, predicates, limit)?;
+    let table_scan = build_table_scan(
+        table,
+        snapshot_id,
+        column_names,
+        predicates,
+        limit,
+        batch_size,
+    )?;
     let stream: Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>> = match bucket {
         Some(bucket) => {
             let task_stream = Box::pin(futures::stream::iter(
