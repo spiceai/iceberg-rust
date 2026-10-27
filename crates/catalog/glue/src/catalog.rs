@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use aws_config::SdkConfig;
 use aws_sdk_glue::operation::create_table::CreateTableError;
 use aws_sdk_glue::operation::update_table::UpdateTableError;
 use aws_sdk_glue::types::TableInput;
@@ -61,6 +62,19 @@ pub struct GlueCatalogBuilder {
     storage_factory: Option<Arc<dyn StorageFactory>>,
     kms_client_factory: Option<Arc<dyn KmsClientFactory>>,
     runtime: Option<Runtime>,
+    sdk_config: Option<SdkConfig>,
+}
+
+impl GlueCatalogBuilder {
+    /// Use `sdk_config` for the Glue client instead of building one from the `aws.*` properties.
+    ///
+    /// The Glue client resolves credentials through the config's credentials provider on each
+    /// request, so refreshing providers (web identity, assumed roles, SSO) keep working after the
+    /// first credentials expire. The `uri` property still overrides the endpoint.
+    pub fn with_sdk_config(mut self, sdk_config: SdkConfig) -> Self {
+        self.sdk_config = Some(sdk_config);
+        self
+    }
 }
 
 impl Default for GlueCatalogBuilder {
@@ -76,6 +90,7 @@ impl Default for GlueCatalogBuilder {
             storage_factory: None,
             kms_client_factory: None,
             runtime: None,
+            sdk_config: None,
         }
     }
 }
@@ -152,7 +167,14 @@ impl CatalogBuilder for GlueCatalogBuilder {
                 Some(factory) => Some(factory.create_kms_client(&self.config.props).await?),
                 None => None,
             };
-            GlueCatalog::new(self.config, self.storage_factory, runtime, kms_client).await
+            GlueCatalog::new(
+                self.config,
+                self.sdk_config,
+                self.storage_factory,
+                runtime,
+                kms_client,
+            )
+            .await
         }
     }
 }
@@ -190,11 +212,18 @@ impl GlueCatalog {
     /// Create a new glue catalog
     async fn new(
         config: GlueCatalogConfig,
+        sdk_config: Option<SdkConfig>,
         storage_factory: Option<Arc<dyn StorageFactory>>,
         runtime: Runtime,
         kms_client: Option<Arc<dyn KeyManagementClient>>,
     ) -> Result<Self> {
-        let sdk_config = create_sdk_config(&config.props, config.uri.as_ref()).await;
+        let sdk_config = match sdk_config {
+            Some(sdk_config) => match config.uri.as_ref() {
+                Some(uri) => sdk_config.to_builder().endpoint_url(uri).build(),
+                None => sdk_config,
+            },
+            None => create_sdk_config(&config.props, config.uri.as_ref()).await,
+        };
         let mut file_io_props = config.props.clone();
         if !file_io_props.contains_key(S3_ACCESS_KEY_ID)
             && let Some(access_key_id) = file_io_props.get(AWS_ACCESS_KEY_ID)
@@ -957,5 +986,101 @@ impl Catalog for GlueCatalog {
         })?;
 
         Ok(staged_table)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, SystemTime};
+
+    use aws_config::{BehaviorVersion, Region};
+    use aws_credential_types::Credentials;
+    use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvider, future};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    use super::*;
+
+    /// Issues credentials that expire immediately, so every request must resolve new ones.
+    #[derive(Debug, Default)]
+    struct ExpiringCredentials {
+        issued: Arc<AtomicUsize>,
+    }
+
+    impl ProvideCredentials for ExpiringCredentials {
+        fn provide_credentials<'a>(&'a self) -> future::ProvideCredentials<'a>
+        where Self: 'a {
+            let n = self.issued.fetch_add(1, Ordering::SeqCst);
+            future::ProvideCredentials::ready(Ok(Credentials::new(
+                format!("AKID{n}"),
+                "secret",
+                Some(format!("token{n}")),
+                Some(SystemTime::now() + Duration::from_secs(1)),
+                "test",
+            )))
+        }
+    }
+
+    /// Serves an empty `GetDatabases` response and records each request's `Authorization` header.
+    async fn serve_glue(listener: TcpListener, auth_headers: Arc<std::sync::Mutex<Vec<String>>>) {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 64 * 1024];
+            let n = stream.read(&mut buf).await.unwrap();
+            let request = String::from_utf8_lossy(&buf[..n]).to_string();
+            if let Some(auth) = request
+                .lines()
+                .find(|l| l.to_ascii_lowercase().starts_with("authorization:"))
+            {
+                auth_headers.lock().unwrap().push(auth.to_string());
+            }
+            let body = r#"{"DatabaseList":[]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/x-amz-json-1.1\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn sdk_config_credentials_are_resolved_per_request() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let auth_headers = Arc::new(std::sync::Mutex::new(Vec::new()));
+        tokio::spawn(serve_glue(listener, Arc::clone(&auth_headers)));
+
+        let provider = ExpiringCredentials::default();
+        let issued = Arc::clone(&provider.issued);
+        let sdk_config = SdkConfig::builder()
+            .behavior_version(BehaviorVersion::latest())
+            .region(Region::new("us-east-1"))
+            .credentials_provider(SharedCredentialsProvider::new(provider))
+            .build();
+
+        let catalog = GlueCatalogBuilder::default()
+            .with_sdk_config(sdk_config)
+            .load(
+                "glue",
+                HashMap::from([
+                    (GLUE_CATALOG_PROP_URI.to_string(), endpoint),
+                    (
+                        GLUE_CATALOG_PROP_WAREHOUSE.to_string(),
+                        "s3://bucket/warehouse".to_string(),
+                    ),
+                ]),
+            )
+            .await
+            .unwrap();
+
+        catalog.list_namespaces(None).await.unwrap();
+        catalog.list_namespaces(None).await.unwrap();
+
+        assert_eq!(issued.load(Ordering::SeqCst), 2);
+        let auth_headers = auth_headers.lock().unwrap();
+        assert_eq!(auth_headers.len(), 2);
+        assert!(auth_headers[0].contains("Credential=AKID0/"));
+        assert!(auth_headers[1].contains("Credential=AKID1/"));
     }
 }
