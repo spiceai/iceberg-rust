@@ -287,6 +287,7 @@ impl ClientCredentialsConfig {
         let body = response.body();
 
         let auth_res: TokenResponse = if status == StatusCode::OK {
+            // The body is left out of the error: it holds the access token.
             Ok(serde_json::from_slice(body).map_err(|e| {
                 Error::new(
                     ErrorKind::Unexpected,
@@ -294,7 +295,6 @@ impl ClientCredentialsConfig {
                 )
                 .with_context("operation", "auth")
                 .with_context("url", self.token_endpoint.clone())
-                .with_context("json", String::from_utf8_lossy(body))
                 .with_source(e)
             })?)
         } else {
@@ -379,5 +379,36 @@ mod tests {
             req.headers().get("authorization").unwrap(),
             "Bearer tok-static"
         );
+    }
+
+    #[tokio::test]
+    async fn test_a_token_response_that_fails_to_parse_leaves_the_token_out_of_the_error() {
+        let mut server = mockito::Server::new_async().await;
+        let _token = server
+            .mock("POST", "/token")
+            .with_status(200)
+            .with_body(r#"{"access_token": "issued-secret"}"#)
+            .create_async()
+            .await;
+        let endpoint = format!("{}/token", server.url());
+        let session = OAuth2Manager::new(endpoint.clone())
+            .with_credential(Some("client-id".to_string()), "client-secret".to_string())
+            .init_session(&test_client(), &HashMap::new())
+            .await
+            .unwrap();
+
+        let mut req = HttpRequest::new(
+            Client::new()
+                .get("https://rest.example.com/v1/config")
+                .build()
+                .unwrap(),
+        );
+        let err = session.authenticate(&mut req).await.unwrap_err();
+
+        for shown in [err.to_string(), format!("{err:?}")] {
+            assert!(!shown.contains("issued-secret"), "{shown}");
+            assert!(shown.contains(&endpoint), "{shown}");
+            assert!(shown.contains("token_type"), "{shown}");
+        }
     }
 }
