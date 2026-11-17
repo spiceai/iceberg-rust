@@ -195,18 +195,17 @@ impl HttpClient {
 
 /// Deserializes a catalog response into the given [`DeserializeOwned`] type.
 ///
-/// Returns an error if unable to parse the response bytes.
+/// Returns an error if unable to parse the response bytes. The error leaves the
+/// body out: a successful response can carry secrets, such as the storage
+/// credentials a `LoadTable` result vends in its `config`.
 pub(crate) fn deserialize_catalog_response<R: DeserializeOwned>(
     response: HttpResponse,
 ) -> Result<R> {
-    let bytes = response.body();
-
-    serde_json::from_slice::<R>(bytes).map_err(|e| {
+    serde_json::from_slice::<R>(response.body()).map_err(|e| {
         Error::new(
             ErrorKind::Unexpected,
             "Failed to parse response from rest catalog server",
         )
-        .with_context("json", String::from_utf8_lossy(bytes))
         .with_source(e)
     })
 }
@@ -281,6 +280,7 @@ pub(crate) fn deserialize_unexpected_catalog_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::LoadTableResult;
 
     #[derive(Debug)]
     struct StaticSession;
@@ -551,5 +551,56 @@ mod tests {
         assert!(result.contains("application/json"));
         // [REDACTED] should NOT be present when redaction is disabled
         assert!(!result.contains("[REDACTED]"));
+    }
+
+    /// A `LoadTable` result whose `config` vends `secret` as storage credentials.
+    fn load_table_body_vending(secret: &str, format_version: u8) -> Vec<u8> {
+        let path = format!(
+            "{}/testdata/load_table_response.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let mut body: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        for key in [
+            "s3.access-key-id",
+            "s3.secret-access-key",
+            "s3.session-token",
+        ] {
+            body["config"][key] = secret.into();
+        }
+        body["metadata"]["format-version"] = format_version.into();
+        serde_json::to_vec(&body).unwrap()
+    }
+
+    #[test]
+    fn test_a_response_that_fails_to_parse_leaves_its_body_out_of_the_error() {
+        let body = load_table_body_vending("vended-secret", 9);
+        let cause = serde_json::from_slice::<LoadTableResult>(&body)
+            .unwrap_err()
+            .to_string();
+
+        let err = deserialize_catalog_response::<LoadTableResult>(HttpResponse::new(
+            http::StatusCode::OK,
+            HeaderMap::new(),
+            body,
+        ))
+        .unwrap_err();
+
+        for shown in [err.to_string(), format!("{err:?}")] {
+            assert!(!shown.contains("vended-secret"), "{shown}");
+            assert!(shown.contains(&cause), "{shown}");
+        }
+    }
+
+    #[test]
+    fn test_a_response_that_parses_keeps_its_vended_credentials() {
+        let result = deserialize_catalog_response::<LoadTableResult>(HttpResponse::new(
+            http::StatusCode::OK,
+            HeaderMap::new(),
+            load_table_body_vending("vended-secret", 1),
+        ))
+        .unwrap();
+
+        assert_eq!(result.config["s3.secret-access-key"], "vended-secret");
     }
 }
