@@ -70,6 +70,19 @@ const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub(crate) const PATH_V1: &str = "v1";
 
+/// Decides whether the catalog may use an endpoint that the server's
+/// `GET /v1/config` response put in place of the configured one.
+///
+/// Catalog initialization calls [`EndpointOverrideCheck::check`] for each
+/// endpoint the merged configuration changed (`uri`, from `overrides`, and
+/// `oauth2-server-uri`, from `overrides` or `defaults`), before any request is
+/// sent to it. An error fails initialization with that error.
+#[async_trait]
+pub trait EndpointOverrideCheck: Debug + Send + Sync {
+    /// Checks `endpoint`, the merged value of the property `key`.
+    async fn check(&self, key: &str, endpoint: &str) -> Result<()>;
+}
+
 /// Builder for [`RestCatalog`], the [`Catalog`]-compatible façade over a
 /// [`RestSessionCatalog`].
 ///
@@ -137,6 +150,13 @@ impl RestCatalogBuilder {
     pub fn with_auth_manager<M>(mut self, auth_manager: M) -> Self
     where M: AuthManager + 'static {
         self.inner = self.inner.with_auth_manager(auth_manager);
+        self
+    }
+
+    /// Sets the check for endpoints that the server's `GET /v1/config`
+    /// response puts in place of the configured ones.
+    pub fn with_endpoint_override_check(mut self, check: Arc<dyn EndpointOverrideCheck>) -> Self {
+        self.inner = self.inner.with_endpoint_override_check(check);
         self
     }
 }
@@ -477,6 +497,7 @@ impl RestClient {
     async fn init(
         user_config: &RestCatalogConfig,
         auth_manager: Arc<dyn AuthManager>,
+        endpoint_override_check: Option<&dyn EndpointOverrideCheck>,
     ) -> Result<Self> {
         let http_client = HttpClient::new(user_config)?;
         // The init session lives only for the config handshake, so a
@@ -502,6 +523,16 @@ impl RestClient {
             _ => crate::endpoint::DEFAULT_ENDPOINTS.clone(),
         };
         let config = user_config.clone().merge_with_config(catalog_config);
+        if let Some(check) = endpoint_override_check {
+            if config.uri != user_config.uri {
+                check.check(REST_CATALOG_PROP_URI, &config.uri).await?;
+            }
+            if let Some(endpoint) = config.explicit_oauth2_server_uri()
+                && user_config.explicit_oauth2_server_uri().as_ref() != Some(&endpoint)
+            {
+                check.check("oauth2-server-uri", &endpoint).await?;
+            }
+        }
         let http_client = http_client.update_with(&config)?;
         // The manager is handed an unauthenticated client: its own
         // requests must not be signed by the session it is deriving.
@@ -746,6 +777,8 @@ pub struct RestSessionCatalog {
     runtime: Runtime,
     /// Optional KMS client for encrypted tables.
     kms_client: Option<Arc<dyn KeyManagementClient>>,
+    /// Set through [`RestSessionCatalogBuilder::with_endpoint_override_check`].
+    endpoint_override_check: Option<Arc<dyn EndpointOverrideCheck>>,
 }
 
 impl RestSessionCatalog {
@@ -764,6 +797,7 @@ impl RestSessionCatalog {
             storage_factory,
             runtime,
             kms_client,
+            endpoint_override_check: None,
         }
     }
 
@@ -882,7 +916,12 @@ impl RestSessionCatalog {
     async fn client(&self) -> Result<&RestClient> {
         self.client
             .get_or_try_init(|| async {
-                RestClient::init(&self.user_config, self.resolve_auth_manager()?).await
+                RestClient::init(
+                    &self.user_config,
+                    self.resolve_auth_manager()?,
+                    self.endpoint_override_check.as_deref(),
+                )
+                .await
             })
             .await
     }
@@ -1564,6 +1603,7 @@ pub struct RestSessionCatalogBuilder {
     storage_factory: Option<Arc<dyn StorageFactory>>,
     kms_client_factory: Option<Arc<dyn KmsClientFactory>>,
     runtime: Option<Runtime>,
+    endpoint_override_check: Option<Arc<dyn EndpointOverrideCheck>>,
 }
 
 impl Default for RestSessionCatalogBuilder {
@@ -1581,6 +1621,7 @@ impl Default for RestSessionCatalogBuilder {
             storage_factory: None,
             kms_client_factory: None,
             runtime: None,
+            endpoint_override_check: None,
         }
     }
 }
@@ -1599,6 +1640,13 @@ impl RestSessionCatalogBuilder {
     pub fn with_auth_manager<M>(mut self, auth_manager: M) -> Self
     where M: AuthManager + 'static {
         self.auth_manager = Some(Box::new(auth_manager));
+        self
+    }
+
+    /// Sets the check for endpoints that the server's `GET /v1/config`
+    /// response puts in place of the configured ones.
+    pub fn with_endpoint_override_check(mut self, check: Arc<dyn EndpointOverrideCheck>) -> Self {
+        self.endpoint_override_check = Some(check);
         self
     }
 
@@ -1715,13 +1763,16 @@ impl RestSessionCatalogBuilder {
                     None => None,
                 };
 
-                Ok(RestSessionCatalog::new(
-                    self.config,
-                    self.auth_manager,
-                    self.storage_factory,
-                    runtime,
-                    kms_client,
-                ))
+                Ok(RestSessionCatalog {
+                    endpoint_override_check: self.endpoint_override_check,
+                    ..RestSessionCatalog::new(
+                        self.config,
+                        self.auth_manager,
+                        self.storage_factory,
+                        runtime,
+                        kms_client,
+                    )
+                })
             }
         }
     }
@@ -2347,6 +2398,170 @@ mod tests {
         // via the session's Debug, which prints its token endpoint).
         let session_debug = format!("{:?}", client.http_client.auth_session());
         assert!(session_debug.contains(&format!("{}/v1/oauth/tokens", overridden.url())));
+    }
+
+    /// Records each endpoint it is asked about and refuses the one for `refused_key`.
+    #[derive(Debug, Default)]
+    struct RecordingEndpointCheck {
+        refused_key: Option<&'static str>,
+        checked: std::sync::Mutex<Vec<(String, String)>>,
+    }
+
+    #[async_trait]
+    impl EndpointOverrideCheck for RecordingEndpointCheck {
+        async fn check(&self, key: &str, endpoint: &str) -> Result<()> {
+            self.checked
+                .lock()
+                .unwrap()
+                .push((key.to_string(), endpoint.to_string()));
+            if self.refused_key == Some(key) {
+                return Err(Error::new(ErrorKind::DataInvalid, format!("refused {key}")));
+            }
+            Ok(())
+        }
+    }
+
+    async fn checked_catalog(
+        uri: String,
+        props: HashMap<String, String>,
+        check: Arc<RecordingEndpointCheck>,
+    ) -> RestCatalog {
+        let mut props = props;
+        props.insert(REST_CATALOG_PROP_URI.to_string(), uri);
+        RestCatalogBuilder::default()
+            .with_endpoint_override_check(check)
+            .load("test", props)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_endpoint_override_check_is_asked_about_each_changed_endpoint() {
+        let mut bootstrap = Server::new_async().await;
+        let mut overridden = Server::new_async().await;
+        let token_endpoint = format!("{}/v1/oauth/tokens", overridden.url());
+        let config_mock = bootstrap
+            .mock("GET", "/v1/config")
+            .with_status(200)
+            .with_body(
+                json!({
+                    "overrides": {"uri": overridden.url()},
+                    "defaults": {"oauth2-server-uri": token_endpoint},
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+        let list_ns_mock = overridden
+            .mock("GET", "/v1/namespaces")
+            .with_body(r#"{"namespaces": []}"#)
+            .create_async()
+            .await;
+        let check = Arc::new(RecordingEndpointCheck::default());
+        let props = HashMap::from([("token".to_string(), "tok".to_string())]);
+
+        checked_catalog(bootstrap.url(), props, check.clone())
+            .await
+            .list_namespaces(None)
+            .await
+            .unwrap();
+
+        config_mock.assert_async().await;
+        list_ns_mock.assert_async().await;
+        assert_eq!(*check.checked.lock().unwrap(), vec![
+            (REST_CATALOG_PROP_URI.to_string(), overridden.url()),
+            ("oauth2-server-uri".to_string(), token_endpoint),
+        ]);
+    }
+
+    #[tokio::test]
+    async fn test_endpoint_override_check_is_not_asked_about_unchanged_endpoints() {
+        let mut server = Server::new_async().await;
+        let token_endpoint = format!("{}/v1/oauth/tokens", server.url());
+        let config_mock = server
+            .mock("GET", "/v1/config")
+            .with_status(200)
+            .with_body(
+                json!({
+                    "overrides": {"uri": server.url()},
+                    "defaults": {"oauth2-server-uri": "http://elsewhere/v1/oauth/tokens"},
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+        let list_ns_mock = server
+            .mock("GET", "/v1/namespaces")
+            .with_body(r#"{"namespaces": []}"#)
+            .create_async()
+            .await;
+        let check = Arc::new(RecordingEndpointCheck::default());
+        let props = HashMap::from([
+            ("token".to_string(), "tok".to_string()),
+            ("oauth2-server-uri".to_string(), token_endpoint),
+        ]);
+
+        checked_catalog(server.url(), props, check.clone())
+            .await
+            .list_namespaces(None)
+            .await
+            .unwrap();
+
+        config_mock.assert_async().await;
+        list_ns_mock.assert_async().await;
+        assert!(check.checked.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_endpoint_override_check_refusal_fails_before_any_request_to_the_endpoint() {
+        for refused_key in [REST_CATALOG_PROP_URI, "oauth2-server-uri"] {
+            let mut bootstrap = Server::new_async().await;
+            let mut overridden = Server::new_async().await;
+            let config_mock = bootstrap
+                .mock("GET", "/v1/config")
+                .with_status(200)
+                .with_body(
+                    json!({
+                        "overrides": {
+                            "uri": overridden.url(),
+                            "oauth2-server-uri": format!("{}/v1/oauth/tokens", overridden.url()),
+                        },
+                        "defaults": {},
+                    })
+                    .to_string(),
+                )
+                .create_async()
+                .await;
+            let bootstrap_oauth_mock =
+                create_oauth_mock_with_path(&mut bootstrap, "/v1/oauth/tokens", "tok", 200).await;
+            let overridden_get_mock = overridden
+                .mock("GET", mockito::Matcher::Any)
+                .expect(0)
+                .create_async()
+                .await;
+            let overridden_post_mock = overridden
+                .mock("POST", mockito::Matcher::Any)
+                .expect(0)
+                .create_async()
+                .await;
+            let check = Arc::new(RecordingEndpointCheck {
+                refused_key: Some(refused_key),
+                ..Default::default()
+            });
+            let props = HashMap::from([("credential".to_string(), "client1:secret1".to_string())]);
+
+            let err = checked_catalog(bootstrap.url(), props, check)
+                .await
+                .list_namespaces(None)
+                .await
+                .unwrap_err();
+
+            assert_eq!(err.message(), format!("refused {refused_key}"));
+            config_mock.assert_async().await;
+            bootstrap_oauth_mock.assert_async().await;
+            overridden_get_mock.assert_async().await;
+            overridden_post_mock.assert_async().await;
+        }
     }
 
     #[tokio::test]
